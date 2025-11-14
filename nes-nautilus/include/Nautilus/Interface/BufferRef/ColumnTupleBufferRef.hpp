@@ -14,7 +14,13 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+#include <DataTypes/DataType.hpp>
 #include <Nautilus/Interface/BufferRef/TupleBufferRef.hpp>
+#include <Nautilus/Interface/Record.hpp>
+#include <Runtime/AbstractBufferProvider.hpp>
 
 namespace NES
 {
@@ -31,13 +37,14 @@ class ColumnTupleBufferRef final : public TupleBufferRef
     {
         Record::RecordFieldIdentifier name;
         DataType type;
+        size_t dataTypeSize;
         uint64_t columnOffset;
     };
 
     std::vector<Field> fields;
 
     /// Private constructor to prevent direct instantiation
-    explicit ColumnTupleBufferRef(std::vector<Field> fields, uint64_t capacity, uint64_t bufferSize);
+    explicit ColumnTupleBufferRef(std::vector<Field> fields, uint64_t tupleSize, uint64_t bufferSize);
 
     /// Allow LowerSchemaProvider::lowerSchema() access to private constructor and Field
     friend class NES::LowerSchemaProvider;
@@ -47,8 +54,8 @@ public:
     ColumnTupleBufferRef(ColumnTupleBufferRef&&) = default;
     ~ColumnTupleBufferRef() override = default;
 
-    std::vector<Record::RecordFieldIdentifier> getAllFieldNames() const override;
-    std::vector<DataType> getAllDataTypes() const override;
+    [[nodiscard]] std::vector<Record::RecordFieldIdentifier> getAllFieldNames() const override;
+    [[nodiscard]] std::vector<DataType> getAllDataTypes() const override;
 
     Record readRecord(
         const std::vector<Record::RecordFieldIdentifier>& projections,
