@@ -426,7 +426,7 @@ private:
             if constexpr (IsString<typename std::tuple_element<I, std::tuple<Types...>>::type>)
             {
                 const VariableSizedAccess childBufferIdx{
-                    *reinterpret_cast<uint64_t*>(const_cast<uint8_t*>((*this)[recordIndex][I].getMemory().data()))};
+                    *reinterpret_cast<VariableSizedAccess::CombinedIndex*>(const_cast<uint8_t*>((*this)[recordIndex][I].getMemory().data()))};
                 std::get<I>(record) = MemoryLayout::readVarSizedDataAsString(this->buffer, childBufferIdx);
             }
             else

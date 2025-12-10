@@ -42,9 +42,30 @@
 #include <function.hpp>
 #include <val.hpp>
 #include <val_ptr.hpp>
+#include <Nautilus/Interface/VariableSizedAccessRef.hpp>
 
 namespace NES
 {
+
+struct CombinedIndexTest
+{
+    uint64_t index;
+    uint64_t size;
+};
+
+// namespace NES::nautilus
+// {
+//     template<>
+//     class nautilus::val<CombinedIndexTest>
+//     {
+//     public:
+//         explicit val(const CombinedIndexTest combinedIndex) : indexOffsetCombined(combinedIndex.index), size(combinedIndex.size) { }
+//
+//     private:
+//         nautilus::val<uint64_t> indexOffsetCombined;
+//         nautilus::val<uint64_t> size;
+//     };
+// }
 
 VarVal
 TupleBufferRef::loadValue(const DataType& physicalType, const RecordBuffer& recordBuffer, const nautilus::val<int8_t*>& fieldReference)
@@ -53,7 +74,10 @@ TupleBufferRef::loadValue(const DataType& physicalType, const RecordBuffer& reco
     {
         return VarVal::readVarValFromMemory(fieldReference, physicalType.type);
     }
-    nautilus::val<VariableSizedAccess> combinedIdxOffset{readValueFromMemRef<VariableSizedAccess::CombinedIndex>(fieldReference)};
+    auto testIndex = readValueFromMemRef<CombinedIndexTest*>(fieldReference);
+
+    nautilus::val<uint64_t> size = getMemberWithOffset<uint64_t>(*testIndex, offsetof(VariableSizedAccess::CombinedIndex, size));
+    // nautilus::val<VariableSizedAccess> combinedIdxOffset{readValueFromMemRef<VariableSizedAccess::CombinedIndex>(fieldReference)};
     const auto varSizedPtr = invoke(
         +[](const TupleBuffer* tupleBuffer, const VariableSizedAccess variableSizedAccess)
         {
