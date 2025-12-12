@@ -38,7 +38,7 @@ namespace NES
 {
 
 template <class Type>
-concept IsNesType = std::is_fundamental_v<Type> || std::is_fundamental_v<std::remove_pointer_t<Type>>;
+concept IsNesType = std::is_fundamental_v<Type> || std::is_fundamental_v<std::remove_pointer_t<Type>> || std::is_same_v<Type, VariableSizedAccess::CombinedIndex>;
 
 
 /// This concept checks via tuple unpacking if Types contains at least one string.

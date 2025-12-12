@@ -60,18 +60,18 @@ struct StateResolver<T>
 }
 
 
-// template<>
-// class val<NES::VariableSizedAccess::CombinedIndex>
-// {
-// public:
-//     using Underlying = NES::VariableSizedAccess::CombinedIndex;
-//
-//     explicit val(const Underlying combinedIndex) : indexOffsetCombined(combinedIndex.index), size(combinedIndex.size) { }
-//
-// private:
-//     val<uint64_t> indexOffsetCombined;
-//     val<uint64_t> size;
-// };
+template<>
+class val<NES::VariableSizedAccess::CombinedIndex>
+{
+public:
+    using Underlying = NES::VariableSizedAccess::CombinedIndex;
+
+    explicit val(const Underlying combinedIndex) : indexOffsetCombined(combinedIndex.index), size(combinedIndex.size) { }
+
+private:
+    val<uint64_t> indexOffsetCombined;
+    val<uint64_t> size;
+};
 
 /// We are specializing the nautilus::val<> implementation so that we can use nautilus::val<VariableSizedAccess>
 template <>
