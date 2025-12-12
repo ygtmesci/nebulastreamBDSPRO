@@ -20,6 +20,7 @@
 #include <functional>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -42,8 +43,6 @@
 #include <Sources/SourceHandle.hpp>
 #include <Sources/SourceReturnType.hpp>
 #include <Util/Logger/Logger.hpp>
-#include <nautilus/function.hpp>
-#include <nautilus/std/cstring.h>
 #include <nautilus/std/sstream.h>
 #include <ErrorHandling.hpp>
 #include <TestTaskQueue.hpp>
@@ -223,7 +222,7 @@ inline void sortTupleBuffers(std::vector<TupleBuffer>& buffers)
 class TupleIterator
 {
 public:
-    TupleIterator(std::vector<TupleBuffer> buffers, Schema schema, const MemoryLayoutType layoutType)
+    TupleIterator(std::vector<TupleBuffer> buffers, const Schema& schema, const MemoryLayoutType layoutType)
         : schema(std::move(schema))
         , buffers(std::move(buffers))
         , bufferRef(LowerSchemaProvider::lowerSchema(this->buffers.at(0).getBufferSize(), schema, layoutType))
@@ -347,7 +346,7 @@ void writeFieldToBuffer(
     RecordBuffer recordBuffer{std::addressof(tupleBuffer)};
     const auto fieldName = tupleBufferRef.getAllFieldNames().at(fieldIndex);
 
-    /// Creating a Nautilus::Record containing the current field
+    /// Creating a Record containing the current field
     if constexpr (std::is_same_v<T, std::string>)
     {
         const auto varSizedAccess
