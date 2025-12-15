@@ -160,7 +160,7 @@ inline void writePagedSizeTupleBufferChunkToFile(
                     const auto currentTupleOffset = tupleIdx * sizeOfSchemaInBytes;
                     const auto currentTupleVarSizedFieldOffset = currentTupleOffset + varSizedFieldOffset;
                     const VariableSizedAccess varSizedAccess{
-                        VariableSizedAccess::CombinedIndex(*reinterpret_cast<uint64_t*>(buffer.getAvailableMemoryArea().data() + currentTupleVarSizedFieldOffset), 0)};
+                        *reinterpret_cast<VariableSizedAccess*>(buffer.getAvailableMemoryArea().data() + currentTupleVarSizedFieldOffset)};
                     const auto variableSizedData = MemoryLayout::readVarSizedDataAsString(buffer, varSizedAccess);
                     appendFile.write(variableSizedData.data(), static_cast<std::streamsize>(variableSizedData.size()));
                 }

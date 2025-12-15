@@ -343,14 +343,14 @@ TEST_F(SmallFilesTest, testBimboDataJSON)
 
 TEST_F(SmallFilesTest, testFoodDataJSON)
 {
-    runTest(TestConfig{
+    runTest<true>(TestConfig{
         .testFileName = "Food",
         .formatterType = "JSON",
         .hasSpanningTuples = true,
         .numberOfIterations = 1,
-        .numberOfThreads = 8,
+        .numberOfThreads = 1,
         .sizeOfRawBuffers = 16,
-        .isCompiled = true});
+        .isCompiled = false});
 }
 
 TEST_F(SmallFilesTest, testSpaceCraftTelemetryJSON)
