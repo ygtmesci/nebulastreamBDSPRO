@@ -66,26 +66,27 @@ std::string CSVFormat::tupleBufferToFormattedCSVString(TupleBuffer tbuffer, cons
         auto tuple = buffer.subspan(i * formattingContext.schemaSizeInBytes, formattingContext.schemaSizeInBytes);
         auto fields = std::views::iota(static_cast<size_t>(0), formattingContext.offsets.size())
             | std::views::transform(
-                          // [&formattingContext, &tuple, &tbuffer, copyOfEscapeStrings = escapeStrings](const auto& index)
-                          [&formattingContext](const auto& index)
+                          [&formattingContext, &tuple, &tbuffer, copyOfEscapeStrings = escapeStrings](const auto& index)
                           {
                               const auto physicalType = formattingContext.physicalTypes[index];
                               if (physicalType.type == DataType::Type::VARSIZED)
                               {
-                                  // const VariableSizedAccess variableSizedAccess{
-                                  //     *std::bit_cast<const uint64_t*>(&tuple[formattingContext.offsets[index]])};
-                                  // auto varSizedData = MemoryLayout::readVarSizedDataAsString(tbuffer, variableSizedAccess);
-                                  // if (copyOfEscapeStrings)
-                                  // {
-                                  //     return "\"" + varSizedData + "\"";
-                                  // }
-                                  // return varSizedData;
-                                  constexpr std::string_view mockSV = "";
-                                  return mockSV;
+                                  const auto base = formattingContext.offsets[index];
+                                  uint64_t idxPacked{};
+                                  uint64_t size{};
+                                  auto size_address = &tuple[base + offsetof(VariableSizedAccess::CombinedIndex, size)];
+                                  std::memcpy(&idxPacked, &tuple[base], sizeof(uint64_t));
+                                  std::memcpy(&size, size_address, sizeof(uint64_t));
+                                  const VariableSizedAccess variableSizedAccess{VariableSizedAccess::CombinedIndex{idxPacked, size}};
+
+                                  auto varSizedData = MemoryLayout::readVarSizedDataAsString(tbuffer, variableSizedAccess);
+                                  if (copyOfEscapeStrings)
+                                  {
+                                      return "\"" + varSizedData + "\"";
+                                  }
+                                  return varSizedData;
                               }
-                              constexpr std::string_view mockSV = "";
-                              return mockSV;
-                              // return physicalType.formattedBytesToString(&tuple[formattingContext.offsets[index]]);
+                              return physicalType.formattedBytesToString(&tuple[formattingContext.offsets[index]]);
                           });
         ss << fmt::format("{}\n", fmt::join(fields, ","));
     }

@@ -29,7 +29,7 @@ template <typename T>
 requires(std::is_base_of_v<NES::VariableSizedAccess, T>)
 struct TypeResolver<T>
 {
-    [[nodiscard]] static constexpr Type to_type() { return TypeResolver<typename T::CombinedIndex>::to_type(); }
+    [[nodiscard]] static constexpr Type to_type() { return TypeResolver<typename T::CombinedIndex>:: to_type(); }
 };
 
 }

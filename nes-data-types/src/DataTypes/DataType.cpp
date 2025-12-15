@@ -18,6 +18,7 @@
 #include <ostream>
 #include <string>
 #include <utility>
+
 #include <DataTypes/DataTypeProvider.hpp>
 #include <Util/Logger/Logger.hpp>
 #include <Util/Strings.hpp>
@@ -26,6 +27,7 @@
 #include <magic_enum/magic_enum.hpp>
 #include <DataTypeRegistry.hpp>
 #include <ErrorHandling.hpp>
+#include "../../../nes-memory/include/MemoryLayout/VariableSizedAccess.hpp"
 
 namespace
 {
@@ -135,7 +137,7 @@ uint32_t DataType::getSizeInBytes() const
             return 4;
         case Type::VARSIZED:
             /// Returning '8' for VARSIZED, because we store 'uint64_t' data that represent how to access the data, c.f., @class VariableSizedAccess
-            return 8;
+            return sizeof(VariableSizedAccess::CombinedIndex);
         case Type::VARSIZED_POINTER_REP:
             return sizeof(int8_t*);
         case Type::INT64:
