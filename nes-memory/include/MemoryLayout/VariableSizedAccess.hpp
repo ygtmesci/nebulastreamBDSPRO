@@ -58,6 +58,7 @@ public:
 
         explicit Index(uint64_t index);
         static Index convertToIndex(CombinedIndex combinedIdxOffset);
+        [[nodiscard]] Underlying getRawIndex() const;
         friend std::ostream& operator<<(std::ostream& os, const Index& index);
         friend std::strong_ordering operator<=>(const Index& lhs, const Index& rhs) = default;
 

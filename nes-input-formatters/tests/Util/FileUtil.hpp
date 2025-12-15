@@ -286,26 +286,22 @@ inline std::vector<TupleBuffer> loadTupleBuffersFromFile(
             const auto numBytesInBuffer = bufferHeader.numberOfTuples * sizeOfSchemaInBytes;
             file.read(parentBuffer.getAvailableMemoryArea<char>().data(), static_cast<std::streamsize>(numBytesInBuffer));
 
-
-            for (size_t childBufferIdx = 0; childBufferIdx < bufferHeader.numberChildBuffers; ++childBufferIdx)
+            for (size_t tupleIdx = 0; tupleIdx < bufferHeader.numberOfTuples; ++tupleIdx)
             {
-                const auto childBufferSize = [](std::ifstream& file)
+                for (const auto &varSizedOffset : varSizedFieldOffsets)
                 {
-                    uint32_t childSize = 0;
-                    file.read(std::bit_cast<char*>(&childSize), sizeof(uint32_t));
-                    return childSize;
-                }(file);
+                    const auto childBufferOffset = tupleIdx * sizeOfSchemaInBytes + varSizedOffset;
+                    const auto varSizedAccess = reinterpret_cast<VariableSizedAccess*>(parentBuffer.getAvailableMemoryArea().data() + childBufferOffset);
+                    if (auto nextChildBuffer = bufferProvider.getUnpooledBuffer(varSizedAccess->getSize().getRawSize()))
+                    {
+                        file.read(nextChildBuffer.value().getAvailableMemoryArea<char>().data(), varSizedAccess->getSize().getRawSize());
 
-                if (auto nextChildBuffer = bufferProvider.getUnpooledBuffer(childBufferSize + sizeof(uint32_t)))
-                {
-                    nextChildBuffer.value().getAvailableMemoryArea<uint32_t>()[0] = childBufferSize;
-                    file.read(nextChildBuffer.value().getAvailableMemoryArea<char>().data() + sizeof(uint32_t), childBufferSize);
-
-                    const auto newChildBufferIdx = parentBuffer.storeChildBuffer(nextChildBuffer.value());
-                    updateChildBufferIdx(parentBuffer, VariableSizedAccess{newChildBufferIdx, VariableSizedAccess::Size(0)}, varSizedFieldOffsets, sizeOfSchemaInBytes);
-                    continue;
+                        const auto newChildBufferIdx = parentBuffer.storeChildBuffer(nextChildBuffer.value());
+                        *varSizedAccess = VariableSizedAccess{newChildBufferIdx, VariableSizedAccess::Offset(0), varSizedAccess->getSize()};
+                        continue;
+                    }
+                    throw BufferAllocationFailure("Failed to get unpooled buffer");
                 }
-                throw BufferAllocationFailure("Failed to get unpooled buffer");
             }
             parentBuffer.setNumberOfTuples(bufferHeader.numberOfTuples);
             parentBuffer.setSequenceNumber(SequenceNumber(bufferHeader.sequenceNumber));
