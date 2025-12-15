@@ -160,7 +160,7 @@ inline void writePagedSizeTupleBufferChunkToFile(
                     const auto currentTupleOffset = tupleIdx * sizeOfSchemaInBytes;
                     const auto currentTupleVarSizedFieldOffset = currentTupleOffset + varSizedFieldOffset;
                     const VariableSizedAccess varSizedAccess{
-                        *reinterpret_cast<uint64_t*>(buffer.getAvailableMemoryArea().data() + currentTupleVarSizedFieldOffset)};
+                        VariableSizedAccess::CombinedIndex(*reinterpret_cast<uint64_t*>(buffer.getAvailableMemoryArea().data() + currentTupleVarSizedFieldOffset), 0)};
                     const auto variableSizedData = MemoryLayout::readVarSizedDataAsString(buffer, varSizedAccess);
                     appendFile.write(variableSizedData.data(), static_cast<std::streamsize>(variableSizedData.size()));
                 }
@@ -302,7 +302,7 @@ inline std::vector<TupleBuffer> loadTupleBuffersFromFile(
                     file.read(nextChildBuffer.value().getAvailableMemoryArea<char>().data() + sizeof(uint32_t), childBufferSize);
 
                     const auto newChildBufferIdx = parentBuffer.storeChildBuffer(nextChildBuffer.value());
-                    updateChildBufferIdx(parentBuffer, VariableSizedAccess{newChildBufferIdx}, varSizedFieldOffsets, sizeOfSchemaInBytes);
+                    updateChildBufferIdx(parentBuffer, VariableSizedAccess{newChildBufferIdx, VariableSizedAccess::Size(0)}, varSizedFieldOffsets, sizeOfSchemaInBytes);
                     continue;
                 }
                 throw BufferAllocationFailure("Failed to get unpooled buffer");

@@ -122,6 +122,8 @@ public:
     {
     }
 
+    explicit VariableSizedAccess(const uint64_t combinedIdxOffset, const uint64_t size) : VariableSizedAccess(CombinedIndex{combinedIdxOffset, size}) { }
+
     explicit VariableSizedAccess(const Index index, const Size size) : offset(0), index(index), size(size) { }
 
     explicit VariableSizedAccess(const Index index, const Offset offset, const Size size) : offset(offset), index(index), size(size) { }
