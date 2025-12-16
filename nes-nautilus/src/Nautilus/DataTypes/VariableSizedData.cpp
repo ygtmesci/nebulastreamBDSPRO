@@ -28,18 +28,12 @@ namespace NES
 {
 
 VariableSizedData::VariableSizedData(const nautilus::val<int8_t*>& reference, const nautilus::val<uint32_t>& size)
-    : size(size), ptrToVarSized(reference)
-{
-}
+    : size(size), ptrToVarSized(reference) {}
 
 VariableSizedData::VariableSizedData(const nautilus::val<int8_t*>& pointerToVarSizedData)
-    : VariableSizedData(pointerToVarSizedData, 0)
-{
-}
+    : VariableSizedData(pointerToVarSizedData, 0) {}
 
-VariableSizedData::VariableSizedData(const VariableSizedData& other) : size(other.size), ptrToVarSized(other.ptrToVarSized)
-{
-}
+VariableSizedData::VariableSizedData(const VariableSizedData& other) : size(other.size), ptrToVarSized(other.ptrToVarSized) {}
 
 VariableSizedData& VariableSizedData::operator=(const VariableSizedData& other) noexcept
 {
@@ -54,9 +48,7 @@ VariableSizedData& VariableSizedData::operator=(const VariableSizedData& other) 
 }
 
 VariableSizedData::VariableSizedData(VariableSizedData&& other) noexcept
-    : size(std::move(other.size)), ptrToVarSized(std::move(other.ptrToVarSized))
-{
-}
+    : size(std::move(other.size)), ptrToVarSized(std::move(other.ptrToVarSized)) {}
 
 VariableSizedData& VariableSizedData::operator=(VariableSizedData&& other) noexcept
 {

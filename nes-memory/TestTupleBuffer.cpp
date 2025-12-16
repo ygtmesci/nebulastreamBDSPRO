@@ -77,7 +77,7 @@ void DynamicTuple::writeVarSized(
     std::variant<const uint64_t, const std::string> field, std::string_view value, AbstractBufferProvider& bufferProvider)
 {
     auto combinedIdxOffset
-        = MemoryLayout::writeVarSized<MemoryLayout::PREPEND_NONE>(buffer, bufferProvider, std::as_bytes(std::span{value}));
+        = MemoryLayout::writeVarSized(buffer, bufferProvider, std::as_bytes(std::span{value}));
     std::visit(
         [this, combinedIdxOffset](const auto& key)
         {
