@@ -18,6 +18,7 @@
 #include <string_view>
 #include <vector>
 #include <DataTypes/DataType.hpp>
+#include <DataTypes/DataTypeProvider.hpp>
 #include <DataTypes/Schema.hpp>
 #include <Functions/LogicalFunction.hpp>
 #include <Serialization/DataTypeSerializationUtil.hpp>
@@ -46,12 +47,27 @@ LogicalFunction CeilLogicalFunction::withDataType(const DataType& dataType) cons
 
 LogicalFunction CeilLogicalFunction::withInferredDataType(const Schema& schema) const
 {
-    std::vector<LogicalFunction> newChildren;
-    for (auto& child : getChildren())
+    const auto newChild = child.withInferredDataType(schema);
+    const auto childDataType = newChild.getDataType();
+    auto outputType = newChild.getDataType();
+    if (childDataType.isFloat())
     {
-        newChildren.push_back(child.withInferredDataType(schema));
+        if (childDataType.isSameDataType<float>())
+        {
+            outputType = DataTypeProvider::provideDataType(DataType::Type::INT32);
+        }
+        else if (childDataType.isSameDataType<double>())
+        {
+            outputType = DataTypeProvider::provideDataType(DataType::Type::INT64);
+        }
+        else
+        {
+            throw CannotInferSchema(
+                "Ceil Function Node: the dataType of a float needs to be either float or double, but was: {}", child.getDataType());
+        }
     }
-    return withChildren(newChildren);
+
+    return withDataType(outputType).withChildren({newChild});
 };
 
 std::vector<LogicalFunction> CeilLogicalFunction::getChildren() const
