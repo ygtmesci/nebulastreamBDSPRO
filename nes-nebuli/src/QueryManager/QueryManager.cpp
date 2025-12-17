@@ -26,17 +26,21 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+
+#include <DistributedQuery.hpp>
+#include <ErrorHandling.hpp>
 #include <Identifiers/Identifiers.hpp>
 #include <Listeners/QueryLog.hpp>
 #include <Plans/LogicalPlan.hpp>
 #include <Runtime/Execution/QueryStatus.hpp>
 #include <Util/Logger/Logger.hpp>
 #include <Util/Pointers.hpp>
-#include <fmt/chrono.h>
-#include <DistributedQuery.hpp>
-#include <ErrorHandling.hpp>
 #include <WorkerCatalog.hpp>
 #include <WorkerConfig.hpp>
+
+#include <fmt/chrono.h>
+
+#include <QueryManager/FileQueryPlanStore.h>
 
 namespace NES
 {
@@ -52,43 +56,37 @@ DistributedQueryId uniqueDistributedQueryId(const QueryManagerState& state)
     }
     return uniqueId;
 }
-}
+} // namespace
 
 std::expected<DistributedQuery, Exception> QueryManager::getQuery(DistributedQueryId query) const
 {
-    const auto it = state.queries.find(query);
+    auto it = state.queries.find(query);
     if (it == state.queries.end())
     {
-        return std::unexpected(QueryNotFound("Query {} is not known to the QueryManager", query));
+        return std::unexpected(Exception("Query not found", 0));
     }
     return it->second;
 }
 
+/* ============================
+ * QueryManagerBackends
+ * ============================ */
+
 std::unordered_map<GrpcAddr, UniquePtr<QuerySubmissionBackend>>
 QueryManager::QueryManagerBackends::createBackends(const std::vector<WorkerConfig>& workers, BackendProvider& provider)
 {
-    std::unordered_map<GrpcAddr, UniquePtr<QuerySubmissionBackend>> backends;
+    std::unordered_map<GrpcAddr, UniquePtr<QuerySubmissionBackend>> result;
     for (const auto& workerConfig : workers)
     {
-        backends.emplace(workerConfig.grpc, provider(workerConfig));
+        result.emplace(workerConfig.grpc, provider(workerConfig));
     }
-    return backends;
+    return result;
 }
 
 QueryManager::QueryManagerBackends::QueryManagerBackends(SharedPtr<WorkerCatalog> workerCatalog, BackendProvider provider)
     : workerCatalog(std::move(workerCatalog)), backendProvider(std::move(provider))
 {
     rebuildBackendsIfNeeded();
-}
-
-QueryManager::QueryManager(SharedPtr<WorkerCatalog> workerCatalog, BackendProvider provider, QueryManagerState state)
-    : state(std::move(state)), backends(std::move(workerCatalog), std::move(provider))
-{
-}
-
-QueryManager::QueryManager(SharedPtr<WorkerCatalog> workerCatalog, BackendProvider provider)
-    : backends(std::move(workerCatalog), std::move(provider))
-{
 }
 
 void QueryManager::QueryManagerBackends::rebuildBackendsIfNeeded() const
@@ -102,6 +100,28 @@ void QueryManager::QueryManagerBackends::rebuildBackendsIfNeeded() const
     }
 }
 
+/* ============================
+ * QueryManager
+ * ============================ */
+
+QueryManager::QueryManager(SharedPtr<WorkerCatalog> workerCatalog, BackendProvider provider, QueryManagerState state)
+    : state(std::move(state)),
+      backends(std::move(workerCatalog), std::move(provider)),
+      planStore(std::make_unique<FileQueryPlanStore>())
+{
+}
+
+QueryManager::QueryManager(SharedPtr<WorkerCatalog> workerCatalog, BackendProvider provider)
+    : backends(std::move(workerCatalog), std::move(provider)),
+      planStore(std::make_unique<FileQueryPlanStore>())
+{
+    auto storedPlans = planStore->loadAll();
+    for (const auto& [id, plan] : storedPlans)
+    {
+        (void)registerQuery(plan); // consume [[nodiscard]]
+    }
+}
+
 [[nodiscard]] std::expected<DistributedQueryId, Exception> QueryManager::registerQuery(const DistributedLogicalPlan& plan)
 {
     std::unordered_map<GrpcAddr, std::vector<LocalQueryId>> localQueries;
@@ -111,9 +131,14 @@ void QueryManager::QueryManagerBackends::rebuildBackendsIfNeeded() const
     {
         id = uniqueDistributedQueryId(state);
     }
-    else if (this->state.queries.contains(plan.getQueryId()))
+    else if (this->state.queries.contains(id))
     {
-        throw QueryAlreadyRegistered("{}", plan.getQueryId());
+        throw QueryAlreadyRegistered("{}", id);
+    }
+
+    if (planStore)
+    {
+        planStore->persist(id, plan);
     }
 
     for (const auto& [grpcAddr, localPlans] : plan)
@@ -139,7 +164,7 @@ void QueryManager::QueryManagerBackends::rebuildBackendsIfNeeded() const
         }
     }
 
-    this->state.queries.emplace(id, std::move(localQueries));
+    this->state.queries.emplace(id, DistributedQuery{std::move(localQueries)});
     return id;
 }
 
@@ -179,14 +204,10 @@ std::expected<void, std::vector<Exception>> QueryManager::start(DistributedQuery
         return std::unexpected{exceptions};
     }
 
-    /// Poll all queries until there status has changed to something other than Registered.
-    /// We do this so the function can guarantee that the next call to status will guarantee that the query is not in the Registered
-    /// State anymore.
     auto waitForStatusChange = query.iterate() | std::ranges::to<std::vector>() | std::ranges::to<std::unordered_set>();
-    /// The query is expected to be moved into the started state pretty quickly after lowering, it is very unlikely to even observe
-    /// the status not changing immediatly, so a rapid polling interval is appropriate.
     constexpr auto statusPollInterval = std::chrono::milliseconds(10);
     constexpr size_t statusRetries = 14;
+
     for (size_t i = 0; i < statusRetries; ++i)
     {
         std::erase_if(
@@ -200,9 +221,6 @@ std::expected<void, std::vector<Exception>> QueryManager::start(DistributedQuery
                     exceptions.emplace_back(QueryStartFailed("Waiting for query state to change: {}", result.error()));
                     return true;
                 }
-
-                /// Waiting until the query state changed. Even if the query status changes to failed we consider the start to be successful.
-                /// Subsequent status requests will find the query in a failed state.
                 return result->state != QueryState::Registered;
             });
 
@@ -295,7 +313,8 @@ std::vector<DistributedQueryId> QueryManager::getRunningQueries() const
                })
         | std::views::filter([](const auto& idAndStatus) { return idAndStatus.has_value(); })
         | std::views::filter([](auto idAndStatus) { return idAndStatus->second.getGlobalQueryState() == DistributedQueryState::Running; })
-        | std::views::transform([](auto idAndStatus) { return idAndStatus->first; }) | std::ranges::to<std::vector>();
+        | std::views::transform([](auto idAndStatus) { return idAndStatus->first; })
+        | std::ranges::to<std::vector>();
 }
 
 std::expected<void, std::vector<Exception>> QueryManager::stop(DistributedQueryId queryId)
@@ -343,6 +362,7 @@ std::expected<void, std::vector<Exception>> QueryManager::unregister(Distributed
         return std::unexpected(std::vector{queryResult.error()});
     }
     auto query = queryResult.value();
+
     std::vector<Exception> exceptions{};
 
     for (const auto& [grpcAddr, localQueryId] : query.iterate())
@@ -368,9 +388,15 @@ std::expected<void, std::vector<Exception>> QueryManager::unregister(Distributed
     {
         return std::unexpected{exceptions};
     }
+
     auto erased = state.queries.erase(queryId);
     INVARIANT(erased == 1, "Should not unregister query that has not been registered");
+
+    if (planStore)
+    {
+        planStore->erase(queryId);
+    }
     return {};
 }
 
-}
+} // namespace NES

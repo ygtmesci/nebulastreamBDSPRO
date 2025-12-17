@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -24,6 +25,7 @@
 #include <string>
 #include <utility>
 #include <unistd.h>
+
 #include <Identifiers/Identifiers.hpp>
 #include <Identifiers/NESStrongType.hpp>
 #include <Identifiers/NESStrongTypeFormat.hpp>
@@ -32,10 +34,12 @@
 #include <Runtime/Execution/QueryStatus.hpp>
 #include <Runtime/NodeEngineBuilder.hpp>
 #include <Runtime/QueryTerminationType.hpp>
+#include <Util/Logger/Logger.hpp>                 // NES_WARN
 #include <Util/Logger/impl/NesLogger.hpp>
 #include <Util/PlanRenderer.hpp>
 #include <Util/Pointers.hpp>
 #include <Util/UUID.hpp>
+
 #include <cpptrace/from_current.hpp>
 #include <CompositeStatisticListener.hpp>
 #include <ErrorHandling.hpp>
@@ -44,6 +48,9 @@
 #include <QueryOptimizer.hpp>
 #include <SingleNodeWorkerConfiguration.hpp>
 #include <WorkerStatus.hpp>
+
+// Worker-side plan store (file-based implementation)
+#include <WorkerState/FileWorkerQueryPlanStore.h>
 
 extern void initReceiverService(const std::string& connectionAddr, const NES::WorkerId& workerId);
 extern void initSenderService(const std::string& connectionAddr, const NES::WorkerId& workerId);
@@ -61,7 +68,10 @@ SingleNodeWorker::SingleNodeWorker(const SingleNodeWorkerConfiguration& configur
     if (configuration.enableGoogleEventTrace.getValue())
     {
         auto googleTracePrinter = std::make_shared<GoogleEventTracePrinter>(
-            fmt::format("trace_{}_{:%Y-%m-%d_%H-%M-%S}_{:d}.json", workerId.getRawValue(), std::chrono::system_clock::now(), ::getpid()));
+            fmt::format("trace_{}_{:%Y-%m-%d_%H-%M-%S}_{:d}.json",
+                        workerId.getRawValue(),
+                        std::chrono::system_clock::now(),
+                        ::getpid()));
         googleTracePrinter->start();
         listener->addListener(googleTracePrinter);
     }
@@ -70,6 +80,35 @@ SingleNodeWorker::SingleNodeWorker(const SingleNodeWorkerConfiguration& configur
 
     optimizer = std::make_unique<QueryOptimizer>(configuration.workerConfiguration.defaultQueryExecution);
     compiler = std::make_unique<QueryCompilation::QueryCompiler>();
+
+    // -------------------------------
+    // Worker-side query plan store init + recovery
+    // -------------------------------
+    planStore = std::make_unique<FileWorkerQueryPlanStore>(
+        std::filesystem::path("/tmp/nes-worker-query-plans") / workerId.getRawValue());
+
+    // Recovery must happen once at startup (NOT in status / polling).
+    if (planStore)
+    {
+        const auto restored = planStore->loadAll();
+        {
+            for (const auto& [localId, plan] : restored.value())
+            {
+                // Ensure the restored plan is keyed consistently.
+                // If your FileWorkerQueryPlanStore uses localId as the filename key,
+                // the plan should also carry that id.
+                LogicalPlan planCopy = plan;
+                if (planCopy.getQueryId() == INVALID_LOCAL_QUERY_ID)
+                {
+                    planCopy.setQueryId(localId);
+                }
+
+                // Re-register using existing mechanism. This rebuilds compiled pipelines in NodeEngine.
+                // NOTE: registerQuery() will also re-persist (idempotent if persist overwrites).
+                const auto res = registerQuery(std::move(planCopy));
+            }
+        }
+    }
 
     if (!configuration.connection.getValue().empty())
     {
@@ -86,6 +125,18 @@ std::expected<LocalQueryId, Exception> SingleNodeWorker::registerQuery(LogicalPl
         if (plan.getQueryId() == INVALID_LOCAL_QUERY_ID)
         {
             plan.setQueryId(LocalQueryId(generateUUID()));
+        }
+
+        // -------------------------------
+        // Persist logical plan BEFORE compilation/registration
+        // -------------------------------
+        if (planStore)
+        {
+            const auto persisted = planStore->persist(plan.getQueryId(), plan);
+            if (!persisted)
+            {
+                return std::unexpected(persisted.error());
+            }
         }
 
         const LogContext context("queryId", plan.getQueryId());
@@ -142,6 +193,20 @@ std::expected<void, Exception> SingleNodeWorker::unregisterQuery(LocalQueryId qu
     {
         PRECONDITION(queryId != INVALID_LOCAL_QUERY_ID, "QueryId must be not invalid!");
         nodeEngine->unregisterQuery(queryId);
+
+        // -------------------------------
+        // Remove persisted logical plan (best-effort)
+        // -------------------------------
+        if (planStore)
+        {
+            const auto erased = planStore->erase(queryId);
+            if (!erased)
+            {
+                // Best-effort erase: do not fail unregister, but report.
+
+            }
+        }
+
         return {};
     }
     CPPTRACE_CATCH(...)
@@ -176,6 +241,7 @@ WorkerStatus SingleNodeWorker::getWorkerStatus(std::chrono::system_clock::time_p
     WorkerStatus status;
     status.after = after;
     status.until = until;
+
     for (const auto& [queryId, state, metrics] : summaries)
     {
         switch (state)
@@ -183,6 +249,7 @@ WorkerStatus SingleNodeWorker::getWorkerStatus(std::chrono::system_clock::time_p
             case QueryState::Registered:
                 /// Ignore these for the worker status
                 break;
+
             case QueryState::Started:
                 INVARIANT(metrics.start.has_value(), "If query is started, it should have a start timestamp");
                 if (metrics.start.value() >= after)
@@ -190,6 +257,7 @@ WorkerStatus SingleNodeWorker::getWorkerStatus(std::chrono::system_clock::time_p
                     status.activeQueries.emplace_back(queryId, std::nullopt);
                 }
                 break;
+
             case QueryState::Running: {
                 INVARIANT(metrics.running.has_value(), "If query is running, it should have a running timestamp");
                 if (metrics.running.value() >= after)
@@ -198,6 +266,7 @@ WorkerStatus SingleNodeWorker::getWorkerStatus(std::chrono::system_clock::time_p
                 }
                 break;
             }
+
             case QueryState::Stopped: {
                 INVARIANT(metrics.running.has_value(), "If query is stopped, it should have a running timestamp");
                 INVARIANT(metrics.stop.has_value(), "If query is stopped, it should have a stopped timestamp");
@@ -207,15 +276,18 @@ WorkerStatus SingleNodeWorker::getWorkerStatus(std::chrono::system_clock::time_p
                 }
                 break;
             }
+
             case QueryState::Failed: {
                 INVARIANT(metrics.stop.has_value(), "If query has failed, it should have a stopped timestamp");
                 if (metrics.stop.value() >= after)
                 {
                     status.terminatedQueries.emplace_back(queryId, metrics.running, metrics.stop.value(), metrics.error);
                 }
+                break;
             }
         }
     }
+
     return status;
 }
 
@@ -224,4 +296,4 @@ std::optional<QueryLog::Log> SingleNodeWorker::getQueryLog(LocalQueryId queryId)
     return nodeEngine->getQueryLog()->getLogForQuery(queryId);
 }
 
-}
+} // namespace NES

@@ -50,6 +50,8 @@ target_link_libraries(nes-nebuli-embedded-lib
         PRIVATE nes-sql-parser yaml-cpp::yaml-cpp highs::highs
 )
 
+
+
 add_tests_if_enabled(tests)
 
 add_subdirectory(apps)

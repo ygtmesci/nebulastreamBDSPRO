@@ -32,6 +32,8 @@
 #include <SingleNodeWorkerConfiguration.hpp>
 #include <WorkerStatus.hpp>
 
+#include <WorkerState/WorkerQueryPlanStore.h>
+
 namespace NES
 {
 
@@ -45,6 +47,7 @@ class SingleNodeWorker
     SharedPtr<NodeEngine> nodeEngine;
     UniquePtr<QueryOptimizer> optimizer;
     UniquePtr<QueryCompilation::QueryCompiler> compiler;
+    UniquePtr<WorkerQueryPlanStore> planStore;   // Janhvi
     SingleNodeWorkerConfiguration configuration;
 
 public:
@@ -57,6 +60,7 @@ public:
     /// Movable
     SingleNodeWorker(SingleNodeWorker&& other) noexcept;
     SingleNodeWorker& operator=(SingleNodeWorker&& other) noexcept;
+
 
     /// Registers a DecomposedQueryPlan which internally triggers the QueryCompiler and registers the executable query plan. Once
     /// returned the query can be started with the QueryId. The registered Query will be in the StoppedState
