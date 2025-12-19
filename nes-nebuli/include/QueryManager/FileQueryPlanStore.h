@@ -6,21 +6,19 @@
 
 namespace NES {
 
-class FileQueryPlanStore final : public QueryPlanStore {
+class FileQueryPlanStore : public QueryPlanStore {
 public:
-    explicit FileQueryPlanStore(std::filesystem::path dir = "/tmp/nes-query-store");
+  explicit FileQueryPlanStore(std::filesystem::path dir);
 
-    void persist(const DistributedQueryId& id,
-                 const DistributedLogicalPlan& plan) override;
+  void persist(const DistributedQueryId&,
+               const LogicalPlan&) override;
 
-    void erase(const DistributedQueryId& id) override;
+  void erase(const DistributedQueryId&) override;
 
-    QueryPlanStore::StoredPlans loadAll() override;
+  StoredPlans loadAll() override;
 
 private:
-    std::filesystem::path baseDir;
-
-    std::filesystem::path fileFor(const DistributedQueryId& id) const;
+  std::filesystem::path baseDir;
 };
 
 } // namespace NES

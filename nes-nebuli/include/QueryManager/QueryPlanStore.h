@@ -3,25 +3,24 @@
 
 #include <unordered_map>
 
-#include <DistributedQuery.hpp>   // ✅ REQUIRED: DistributedQueryId, DistributedLogicalPlan
+#include <DistributedQuery.hpp>   //  REQUIRED: DistributedQueryId, DistributedLogicalPlan
 
-namespace NES {
-
+namespace NES
+{
 class QueryPlanStore {
 public:
-    using StoredPlans =
-        std::unordered_map<DistributedQueryId, DistributedLogicalPlan>;
+  using StoredPlans =
+      std::unordered_map<DistributedQueryId, LogicalPlan>;
 
-    virtual ~QueryPlanStore() = default;
+  virtual ~QueryPlanStore() = default;
 
-    virtual void persist(const DistributedQueryId& id,
-                         const DistributedLogicalPlan& plan) = 0;
+  virtual void persist(const DistributedQueryId&,
+                       const LogicalPlan&) = 0;
 
-    virtual void erase(const DistributedQueryId& id) = 0;
+  virtual void erase(const DistributedQueryId&) = 0;
 
-    virtual StoredPlans loadAll() = 0;
+  virtual StoredPlans loadAll() = 0;
 };
-
-} // namespace NES
+};
 
 #endif // NEBULASTREAM_QUERYPLANSTORE_H

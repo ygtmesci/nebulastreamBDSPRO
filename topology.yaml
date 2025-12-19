@@ -1,0 +1,2 @@
+workers:
+  - grpc: host.docker.internal:8080
