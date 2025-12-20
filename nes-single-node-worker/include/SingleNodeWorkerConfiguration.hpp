@@ -1,47 +1,45 @@
-/*
-    Licensed under the Apache License, Version 2.0 (the "License");
-    you may not use this file except in compliance with the License.
-    You may obtain a copy of the License at
-
-        https://www.apache.org/licenses/LICENSE-2.0
-
-    Unless required by applicable law or agreed to in writing, software
-    distributed under the License is distributed on an "AS IS" BASIS,
-    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-    See the License for the specific language governing permissions and
-    limitations under the License.
-*/
-
 #pragma once
+
 #include <string>
 #include <Configuration/WorkerConfiguration.hpp>
 #include <Configurations/BaseConfiguration.hpp>
 #include <Configurations/ScalarOption.hpp>
 #include <Util/URI.hpp>
 
-namespace NES
-{
+namespace NES {
 
-class SingleNodeWorkerConfiguration final : public BaseConfiguration
-{
+class SingleNodeWorkerConfiguration final : public BaseConfiguration {
 public:
-    ScalarOption<NES::URI> connection = {"connection", "Connection name. This is the {Hostname}:{PORT}"};
+    /// Connection name ({Hostname}:{PORT})
+    ScalarOption<NES::URI> connection{
+        "connection",
+        "Connection name. This is the {Hostname}:{PORT}"
+    };
 
-    /// GRPC Server Address URI. By default, it binds to any address and listens on port 8080
-    ScalarOption<NES::URI> grpcAddressUri
-        = {"grpc",
-           "localhost:8080",
-           R"(The address to try to bind to the server in URI form. If
+    /// GRPC Server Address URI
+    ScalarOption<NES::URI> grpcAddressUri{
+        "grpc",
+        "localhost:8080",
+        R"(The address to try to bind to the server in URI form. If
 the scheme name is omitted, "dns:///" is assumed. To bind to any address,
 please use IPv6 any, i.e., [::]:<port>, which also accepts IPv4
-connections.  Valid values include dns:///localhost:1234,
-192.168.1.1:31416, dns:///[::1]:27182, etc.)"};
+connections. Valid values include dns:///localhost:1234,
+192.168.1.1:31416, dns:///[::1]:27182, etc.)"
+    };
 
-    /// Enable Google Event Trace logging (Chrome tracing format)
-    BoolOption enableGoogleEventTrace
-        = {"enable_event_trace",
-           "false",
-           "Enable Google Event Trace logging that generates Chrome tracing compatible JSON files for performance analysis."};
+    /// Enable Google Event Trace logging
+    BoolOption enableGoogleEventTrace{
+        "enable_event_trace",
+        "false",
+        "Enable Google Event Trace logging that generates Chrome tracing compatible JSON files."
+    };
+
+    /// Directory for persisting query plans (ENABLED FEATURE)
+    ScalarOption<std::string> queryPlanStoreDir{
+        "queryPlanStoreDir",
+        "",
+        "Directory to persist serialized logical query plans for fault tolerance"
+    };
 
 protected:
     std::vector<BaseOption*> getOptions() override;
@@ -51,6 +49,12 @@ protected:
 
 public:
     SingleNodeWorkerConfiguration() = default;
-    WorkerConfiguration workerConfiguration = {"worker", "NodeEngine Configuration"};
+
+    /// NodeEngine configuration subtree
+    WorkerConfiguration workerConfiguration{
+        "worker",
+        "NodeEngine Configuration"
+    };
 };
-}
+
+} // namespace NES

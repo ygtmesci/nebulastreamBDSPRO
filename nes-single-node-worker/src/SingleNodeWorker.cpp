@@ -34,7 +34,7 @@
 #include <Runtime/Execution/QueryStatus.hpp>
 #include <Runtime/NodeEngineBuilder.hpp>
 #include <Runtime/QueryTerminationType.hpp>
-#include <Util/Logger/Logger.hpp>                 // NES_WARN
+#include <Util/Logger/Logger.hpp>
 #include <Util/Logger/impl/NesLogger.hpp>
 #include <Util/PlanRenderer.hpp>
 #include <Util/Pointers.hpp>
@@ -84,31 +84,60 @@ SingleNodeWorker::SingleNodeWorker(const SingleNodeWorkerConfiguration& configur
     // -------------------------------
     // Worker-side query plan store init + recovery
     // -------------------------------
-    planStore = std::make_unique<FileWorkerQueryPlanStore>(
-        std::filesystem::path("/tmp/nes-worker-query-plans") / workerId.getRawValue());
+    if (!configuration.queryPlanStoreDir.getValue().empty())
+    {
+        const auto baseDir = std::filesystem::path(configuration.queryPlanStoreDir.getValue());
+        const auto workerDir = baseDir / fmt::format("{}", workerId);
+;
+        std::error_code ec;
+        std::filesystem::create_directories(workerDir, ec);
+        if (ec)
+        {
+            NES_ERROR("Could not create query plan store dir '{}': {}", workerDir.string(), ec.message());
+            planStore = nullptr;
+        }
+        else
+        {
+            planStore = std::make_unique<FileWorkerQueryPlanStore>(workerDir);
+        }
+
+    }
+    else
+    {
+        planStore = nullptr; // in-memory only
+    }
+
 
     // Recovery must happen once at startup (NOT in status / polling).
     if (planStore)
     {
+        NES_INFO("Starting query plan recovery");
         const auto restored = planStore->loadAll();
+        if (restored)
         {
             for (const auto& [localId, plan] : restored.value())
             {
-                // Ensure the restored plan is keyed consistently.
-                // If your FileWorkerQueryPlanStore uses localId as the filename key,
-                // the plan should also carry that id.
                 LogicalPlan planCopy = plan;
                 if (planCopy.getQueryId() == INVALID_LOCAL_QUERY_ID)
                 {
                     planCopy.setQueryId(localId);
                 }
 
-                // Re-register using existing mechanism. This rebuilds compiled pipelines in NodeEngine.
-                // NOTE: registerQuery() will also re-persist (idempotent if persist overwrites).
                 const auto res = registerQuery(std::move(planCopy));
+                if (!res)
+                {
+                    NES_ERROR("Failed to re-register restored plan: {}", res.error().what());
+                }
+                (void)res; // optional: avoid unused warning
             }
+
+        }
+        else
+        {
+            NES_ERROR("Query plan recovery failed: {}", restored.error().what());
         }
     }
+
 
     if (!configuration.connection.getValue().empty())
     {

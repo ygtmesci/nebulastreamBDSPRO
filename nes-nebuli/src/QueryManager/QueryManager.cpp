@@ -107,7 +107,7 @@ QueryManager::QueryManager(
     QueryManagerState state)
     : state(std::move(state)),
       backends(std::move(workerCatalog), std::move(provider)),
-      planStore(std::make_unique<FileQueryPlanStore>("/tmp/nes-query-store"))
+      planStore(std::make_unique<FileQueryPlanStore>("/tmp/nes-worker-store"))
 {
 }
 
@@ -115,7 +115,7 @@ QueryManager::QueryManager(
     SharedPtr<WorkerCatalog> workerCatalog,
     BackendProvider provider)
     : backends(std::move(workerCatalog), std::move(provider)),
-      planStore(std::make_unique<FileQueryPlanStore>("/tmp/nes-query-store"))
+      planStore(std::make_unique<FileQueryPlanStore>("/tmp/nes-worker-store"))
 {
     // === Recovery path (Option B) ===
     // Load persisted LogicalPlans and rebuild DistributedLogicalPlans.

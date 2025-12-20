@@ -1,2 +1,28 @@
+query: |
+  SELECT * FROM GENERATOR_SOURCE INTO VOID_SINK
+
+sinks:
+  - name: VOID_SINK
+    type: Void
+    host: worker-1:9090
+    config: {}
+
+logical:
+  - name: GENERATOR_SOURCE
+    schema:
+      - name: v
+        type: FLOAT64
+
+physical:
+  - logical: GENERATOR_SOURCE
+    type: Generator
+    host: worker-1:9090
+    source_config:
+      generator_rate_type: FIXED
+      generator_rate_config: emit_rate 1
+      stop_generator_when_sequence_finishes: NONE
+      generator_schema: |
+        NORMAL_DISTRIBUTION FLOAT64 0 1
+
 workers:
   - grpc: host.docker.internal:8080
