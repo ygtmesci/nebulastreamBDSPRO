@@ -2,6 +2,9 @@
 
 #include <fstream>
 #include <filesystem>
+#include <Serialization/QueryPlanSerializationUtil.hpp>
+#include <SerializableQueryPlan.pb.h>
+
 
 namespace NES {
 
@@ -14,26 +17,27 @@ FileWorkerQueryPlanStore::FileWorkerQueryPlanStore(std::filesystem::path dir)
 std::filesystem::path
 FileWorkerQueryPlanStore::fileFor(const LocalQueryId& id) const
 {
-    // LocalQueryId is printable via stream
-    std::stringstream ss;
-    ss << id;
-    return baseDir / ss.str();
+    return baseDir / id.getRawValue();
 }
+
 
 std::expected<void, Exception>
 FileWorkerQueryPlanStore::persist(const LocalQueryId& id,
-                                  const LogicalPlan&)
+                                  const LogicalPlan& plan)
 {
     try {
         std::ofstream out(fileFor(id), std::ios::binary | std::ios::trunc);
         if (!out.is_open()) {
-            return std::unexpected(
-                Exception("Failed to open plan store file", 1000));
+            return std::unexpected(Exception("Failed to open plan store file", 1000));
         }
 
-        // Minimal persistence: marker file proves durability
-        out << "PERSISTED\n";
-        out.close();
+        SerializableQueryPlan proto =
+            QueryPlanSerializationUtil::serializeQueryPlan(plan);
+
+        if (!proto.SerializeToOstream(&out)) {
+            return std::unexpected(Exception("Failed to serialize LogicalPlan", 1000));
+        }
+
         return {};
     }
     catch (...) {
@@ -55,15 +59,33 @@ FileWorkerQueryPlanStore::loadAll()
     NES_INFO("FileWorkerQueryPlanStore::loadAll scanning {}", baseDir.string());
     std::unordered_map<LocalQueryId, LogicalPlan> restored;
 
-    // Minimal recovery: enumerate files, but do not reconstruct plans
     for (const auto& entry : std::filesystem::directory_iterator(baseDir)) {
         if (!entry.is_regular_file()) {
             continue;
         }
-        // We deliberately do NOT deserialize yet
+
+        const auto stem = entry.path().stem().string(); // removes ".pb"
+        const LocalQueryId id{stem};
+
+        std::ifstream in(entry.path(), std::ios::binary);
+        if (!in.is_open()) {
+            continue;
+        }
+
+        SerializableQueryPlan proto;
+        if (!proto.ParseFromIstream(&in)) {
+            NES_ERROR("Failed to parse persisted plan {}", id);
+            continue;
+        }
+
+        LogicalPlan plan =
+            QueryPlanSerializationUtil::deserializeQueryPlan(proto);
+
+        restored.emplace(id, std::move(plan));
     }
 
     return restored;
 }
+
 
 } // namespace NES

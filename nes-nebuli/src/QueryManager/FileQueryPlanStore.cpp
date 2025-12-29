@@ -17,14 +17,14 @@ FileQueryPlanStore::FileQueryPlanStore(std::filesystem::path dir)
 void FileQueryPlanStore::persist(const DistributedQueryId& id,
                                  const LogicalPlan& plan) {
     const auto filePath =
-        baseDir / (id.getRawValue() + ".pb");
+        baseDir / (plan.getQueryId().getRawValue()); // 29/12 Janhvi
 
-    SerializableQueryPlan proto =
+    const SerializableQueryPlan proto =
         QueryPlanSerializationUtil::serializeQueryPlan(plan);
 
     std::ofstream out(filePath, std::ios::binary | std::ios::trunc);
     if (!out.is_open()) {
-        NES_ERROR("Failed to open file {}", filePath);
+        NES_ERROR("Failed to open file {}", filePath.string());
         return;
     }
 
@@ -50,24 +50,21 @@ QueryPlanStore::StoredPlans FileQueryPlanStore::loadAll() {
             continue;
         }
 
-        const auto stem = entry.path().stem().string();
+        const std::string stem = entry.path().stem().string();
 
-        uint64_t rawId;
-        try {
-            rawId = std::stoull(stem);
-        } catch (...) {
+        if (stem.empty() || stem == DistributedQueryId::INVALID) {
             continue;
         }
 
         DistributedQueryId id{stem};
 
-        std::ifstream in(entry.path(), std::ios::binary);
-        if (!in.is_open()) {
+        std::ifstream input(entry.path(), std::ios::binary);
+        if (!input.is_open()) {
             continue;
         }
 
         SerializableQueryPlan proto;
-        if (!proto.ParseFromIstream(&in)) {
+        if (!proto.ParseFromIstream(&input)) {
             NES_DEBUG("Failed to parse plan {}", id);
             continue;
         }
@@ -75,7 +72,7 @@ QueryPlanStore::StoredPlans FileQueryPlanStore::loadAll() {
         LogicalPlan plan =
             QueryPlanSerializationUtil::deserializeQueryPlan(proto);
 
-        result.emplace(id, std::move(plan));
+        result.emplace(std::move(id), std::move(plan));
     }
 
     return result;

@@ -77,6 +77,7 @@ class QueryManager
         void rebuildBackendsIfNeeded() const;
 
     public:
+        std::vector<WorkerConfig> getAllWorkers() const;
         QueryManagerBackends(SharedPtr<WorkerCatalog> workerCatalog,
                              BackendProvider provider);
 

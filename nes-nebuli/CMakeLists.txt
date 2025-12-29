@@ -29,8 +29,13 @@ find_package(argparse CONFIG REQUIRED)
 find_package(replxx CONFIG REQUIRED)
 
 target_include_directories(nes-nebuli-lib
-        PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-        PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/private>)
+        PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        PRIVATE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/private>
+)
+
 
 target_link_libraries(nes-nebuli-lib
         PUBLIC nes-logical-operators nes-sql-parser nes-single-node-worker-interface
@@ -42,8 +47,12 @@ target_compile_definitions(nes-nebuli-embedded-lib PUBLIC
 )
 
 target_include_directories(nes-nebuli-embedded-lib
-        PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-        PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/private>)
+        PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        PRIVATE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/private>
+)
 
 target_link_libraries(nes-nebuli-embedded-lib
         PUBLIC nes-logical-operators nes-single-node-worker-lib nes-sql-parser nes-single-node-worker-interface

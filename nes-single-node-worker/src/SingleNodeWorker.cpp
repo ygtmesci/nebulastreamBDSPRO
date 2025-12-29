@@ -82,13 +82,13 @@ SingleNodeWorker::SingleNodeWorker(const SingleNodeWorkerConfiguration& configur
     compiler = std::make_unique<QueryCompilation::QueryCompiler>();
 
     // -------------------------------
-    // Worker-side query plan store init + recovery
+    // Worker-side query plan store init
     // -------------------------------
     if (!configuration.queryPlanStoreDir.getValue().empty())
     {
         const auto baseDir = std::filesystem::path(configuration.queryPlanStoreDir.getValue());
         const auto workerDir = baseDir / fmt::format("{}", workerId);
-;
+
         std::error_code ec;
         std::filesystem::create_directories(workerDir, ec);
         if (ec)
@@ -98,46 +98,58 @@ SingleNodeWorker::SingleNodeWorker(const SingleNodeWorkerConfiguration& configur
         }
         else
         {
-            planStore = std::make_unique<FileWorkerQueryPlanStore>(workerDir);
+            planStore = std::make_unique<FileWorkerQueryPlanStore>(baseDir); // NOT WORKER DIR
         }
-
     }
     else
     {
         planStore = nullptr; // in-memory only
     }
 
-
-    // Recovery must happen once at startup (NOT in status / polling).
+    // -------------------------------
+    // Recovery: re-register persisted plans exactly once at startup
+    // -------------------------------
     if (planStore)
     {
-        NES_INFO("Starting query plan recovery");
+        NES_INFO("SingleNodeWorker: attempting query plan recovery from '{}'", configuration.queryPlanStoreDir.getValue());
+
         const auto restored = planStore->loadAll();
-        if (restored)
+        if (!restored)
         {
-            for (const auto& [localId, plan] : restored.value())
+            NES_ERROR("SingleNodeWorker: query plan recovery failed: {}", restored.error().what());
+        }
+        else
+        {
+            NES_INFO("SingleNodeWorker: found {} persisted plan(s)", restored->size());
+
+            for (const auto& [localId, storedPlan] : restored.value())
             {
-                LogicalPlan planCopy = plan;
+                // Ensure the plan has the same LocalQueryId as the filename/key.
+                LogicalPlan planCopy = storedPlan;
                 if (planCopy.getQueryId() == INVALID_LOCAL_QUERY_ID)
                 {
                     planCopy.setQueryId(localId);
                 }
+                else if (planCopy.getQueryId() != localId)
+                {
+                    NES_ERROR("SingleNodeWorker: skipping restore: plan id {} != stored id {}", planCopy.getQueryId(), localId);
+                    continue;
+                }
 
+                // IMPORTANT: registerQuery() will attempt to persist again.
+                // This is okay because FileWorkerQueryPlanStore::persist should overwrite idempotently.
                 const auto res = registerQuery(std::move(planCopy));
                 if (!res)
                 {
-                    NES_ERROR("Failed to re-register restored plan: {}", res.error().what());
+                    NES_ERROR("SingleNodeWorker: failed to re-register restored plan {}: {}", localId, res.error().what());
                 }
-                (void)res; // optional: avoid unused warning
+                else
+                {
+                    NES_INFO("SingleNodeWorker: restored local query {}", *res);
+                }
             }
-
-        }
-        else
-        {
-            NES_ERROR("Query plan recovery failed: {}", restored.error().what());
         }
     }
-
 
     if (!configuration.connection.getValue().empty())
     {
@@ -161,6 +173,10 @@ std::expected<LocalQueryId, Exception> SingleNodeWorker::registerQuery(LogicalPl
         // -------------------------------
         if (planStore)
         {
+            if (plan.getQueryId() == INVALID_LOCAL_QUERY_ID)
+            {
+                plan.setQueryId(LocalQueryId(generateUUID()));
+            }
             const auto persisted = planStore->persist(plan.getQueryId(), plan);
             if (!persisted)
             {
@@ -232,7 +248,7 @@ std::expected<void, Exception> SingleNodeWorker::unregisterQuery(LocalQueryId qu
             if (!erased)
             {
                 // Best-effort erase: do not fail unregister, but report.
-
+                NES_ERROR("SingleNodeWorker: failed to erase persisted plan {}: {}", queryId, erased.error().what());
             }
         }
 

@@ -74,6 +74,13 @@ QueryManager::QueryManagerBackends::createBackends(
     return result;
 }
 
+std::vector<WorkerConfig>
+QueryManager::QueryManagerBackends::getAllWorkers() const
+{
+    rebuildBackendsIfNeeded();
+    return workerCatalog->getAllWorkers();
+}
+
 QueryManager::QueryManagerBackends::QueryManagerBackends(
     SharedPtr<WorkerCatalog> workerCatalog,
     BackendProvider provider)
@@ -106,10 +113,53 @@ QueryManager::QueryManager(
     BackendProvider provider,
     QueryManagerState state)
     : state(std::move(state)),
-      backends(std::move(workerCatalog), std::move(provider)),
-      planStore(std::make_unique<FileQueryPlanStore>("/tmp/nes-worker-store"))
+      backends(std::move(workerCatalog), std::move(provider))
+      // TMP planStore(std::make_unique<FileQueryPlanStore>("/tmp/nes-worker-store"))
 {
+    NES_INFO("QueryManager startup: attempting restore from plan store");
+
+    if (!planStore) {
+        NES_INFO("QueryManager restore skipped: no planStore configured");
+        return;
+    }
+
+    auto storedPlans = planStore->loadAll();
+    NES_INFO("QueryManager restore: found {} persisted plan(s)", storedPlans.size());
+
+    if (storedPlans.empty()) {
+        return;
+    }
+
+    const auto workers = backends.getAllWorkers();
+    if (workers.empty()) {
+        NES_INFO("QueryManager restore aborted: no workers available at startup");
+        return;
+    }
+
+    for (const auto& [queryId, logicalPlan] : storedPlans)
+    {
+        std::unordered_map<GrpcAddr, std::vector<LogicalPlan>> localPlans;
+
+        for (const auto& worker : workers) {
+            localPlans[worker.grpc].push_back(logicalPlan);
+        }
+
+        DecomposedLogicalPlan<GrpcAddr> decomposed{std::move(localPlans)};
+        DistributedLogicalPlan dplan{std::move(decomposed), logicalPlan};
+        dplan.setQueryId(queryId);
+
+        const auto result = registerQuery(dplan);
+        if (!result) {
+            NES_ERROR(
+                "QueryManager restore: failed to restore query {}: {}",
+                queryId,
+                result.error().what());
+        } else {
+            NES_INFO("QueryManager restore: restored query {}", *result);
+        }
+    }
 }
+
 
 QueryManager::QueryManager(
     SharedPtr<WorkerCatalog> workerCatalog,
@@ -126,10 +176,11 @@ QueryManager::QueryManager(
     for (const auto& [id, logicalPlan] : storedPlans)
     {
         std::unordered_map<GrpcAddr, std::vector<LogicalPlan>> localPlans;
+        const auto workers = backends.getAllWorkers();
 
-        for (const auto& [grpcAddr, _backend] : backends)
+        for (const auto& w : workers)
         {
-            localPlans[grpcAddr].push_back(logicalPlan);
+            localPlans[w.grpc].push_back(logicalPlan);
         }
 
         DecomposedLogicalPlan<GrpcAddr> decomposed{std::move(localPlans)};

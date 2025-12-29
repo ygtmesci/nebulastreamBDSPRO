@@ -1,23 +1,14 @@
-//
-// Created by Janhvi Goje  on 16/12/25.
-//
-
 #include "QueryPlanStore.h"
 
-class QueryPlanStore {
-public:
-    virtual ~QueryPlanStore() = default;
+namespace NES {
 
-    virtual void persist(
-        const DistributedQueryId& id,
-        const std::unordered_map<GrpcAddr, std::vector<LocalQueryId>>& mapping
-    ) = 0;
+// Intentionally empty.
+//
+// QueryPlanStore is a pure abstract interface.
+// All logic must be implemented in concrete subclasses
+// (e.g., FileQueryPlanStore).
+//
+// This file exists only to keep build systems and IDEs happy
+// when a .cpp is expected for the target.
 
-    virtual void erase(const DistributedQueryId& id) = 0;
-
-    virtual std::unordered_map<
-        DistributedQueryId,
-        std::unordered_map<GrpcAddr, std::vector<LocalQueryId>>
-    > loadAll() = 0;
-};
-
+} // namespace NES
