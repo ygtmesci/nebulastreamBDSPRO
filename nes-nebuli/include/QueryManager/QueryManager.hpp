@@ -1,8 +1,24 @@
+/*
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
+
+        https://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
+*/
+
 #pragma once
 
 #include <chrono>
 #include <cstdint>
 #include <expected>
+#include <memory>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -17,7 +33,8 @@
 #include <WorkerConfig.hpp>
 #include <WorkerStatus.hpp>
 
-#include <QueryManager/QueryPlanStore.h> // interface ONLY
+#include <QueryManager/QueryPlanStore.h>
+#include <QueryManager/EtcdQueryStore.hpp>
 
 namespace NES {
 
@@ -52,6 +69,19 @@ using BackendProvider =
 struct QueryManagerState
 {
     std::unordered_map<DistributedQueryId, DistributedQuery> queries;
+};
+
+/* ============================
+ * QueryManagerConfiguration
+ * ============================ */
+struct QueryManagerConfiguration
+{
+    /// If true, use etcd for query state storage (pull-based model)
+    /// If false, use GRPC backends (push-based model)
+    bool useEtcd = false;
+    
+    /// etcd configuration (only used if useEtcd is true)
+    EtcdConfiguration etcdConfig;
 };
 
 /* ============================
@@ -115,14 +145,27 @@ private:
     QueryManagerState state;
     QueryManagerBackends backends;
     std::unique_ptr<QueryPlanStore> planStore;
+    
+    /// etcd-based query store (used when useEtcd is true)
+    std::unique_ptr<EtcdQueryStore> etcdStore;
+    
+    /// Configuration
+    QueryManagerConfiguration config;
 
 public:
+    /// Constructor with GRPC backends (legacy push-based model)
     QueryManager(SharedPtr<WorkerCatalog> workerCatalog,
                  BackendProvider provider,
                  QueryManagerState state);
 
+    /// Constructor with GRPC backends (legacy)
     QueryManager(SharedPtr<WorkerCatalog> workerCatalog,
                  BackendProvider provider);
+
+    /// Constructor with etcd store (new pull-based model)
+    QueryManager(SharedPtr<WorkerCatalog> workerCatalog,
+                 BackendProvider provider,
+                 QueryManagerConfiguration config);
 
     [[nodiscard]] std::expected<DistributedQueryId, Exception>
     registerQuery(const DistributedLogicalPlan& plan);
@@ -150,6 +193,23 @@ public:
 
     [[nodiscard]] std::vector<DistributedQueryId>
     getRunningQueries() const;
+
+private:
+    /// Register query using etcd (pull-based model)
+    [[nodiscard]] std::expected<DistributedQueryId, Exception>
+    registerQueryViaEtcd(const DistributedLogicalPlan& plan);
+
+    /// Register query using GRPC backends (push-based model)
+    [[nodiscard]] std::expected<DistributedQueryId, Exception>
+    registerQueryViaGrpc(const DistributedLogicalPlan& plan);
+
+    /// Unregister query using etcd
+    std::expected<void, std::vector<Exception>>
+    unregisterViaEtcd(DistributedQueryId query);
+
+    /// Unregister query using GRPC backends
+    std::expected<void, std::vector<Exception>>
+    unregisterViaGrpc(DistributedQueryId query);
 };
 
 } // namespace NES

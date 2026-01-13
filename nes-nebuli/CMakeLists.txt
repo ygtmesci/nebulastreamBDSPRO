@@ -27,6 +27,7 @@ find_package(highs CONFIG REQUIRED)
 find_package(yaml-cpp CONFIG REQUIRED)
 find_package(argparse CONFIG REQUIRED)
 find_package(replxx CONFIG REQUIRED)
+find_package(etcd-cpp-api CONFIG REQUIRED)
 
 target_include_directories(nes-nebuli-lib
         PUBLIC
@@ -39,7 +40,7 @@ target_include_directories(nes-nebuli-lib
 
 target_link_libraries(nes-nebuli-lib
         PUBLIC nes-logical-operators nes-sql-parser nes-single-node-worker-interface
-        PRIVATE yaml-cpp::yaml-cpp highs::highs
+        PRIVATE yaml-cpp::yaml-cpp highs::highs etcd-cpp-api
 )
 
 target_compile_definitions(nes-nebuli-embedded-lib PUBLIC
@@ -56,7 +57,7 @@ target_include_directories(nes-nebuli-embedded-lib
 
 target_link_libraries(nes-nebuli-embedded-lib
         PUBLIC nes-logical-operators nes-single-node-worker-lib nes-sql-parser nes-single-node-worker-interface
-        PRIVATE nes-sql-parser yaml-cpp::yaml-cpp highs::highs
+        PRIVATE nes-sql-parser yaml-cpp::yaml-cpp highs::highs etcd-cpp-api
 )
 
 

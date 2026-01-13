@@ -39,6 +39,7 @@
 #include <fmt/chrono.h>
 
 #include <QueryManager/FileQueryPlanStore.h>
+#include <QueryManager/EtcdQueryStore.hpp>
 
 namespace NES
 {
@@ -105,7 +106,7 @@ void QueryManager::QueryManagerBackends::rebuildBackendsIfNeeded() const
 }
 
 /* ============================
- * QueryManager
+ * QueryManager - Constructors
  * ============================ */
 
 QueryManager::QueryManager(
@@ -113,65 +114,22 @@ QueryManager::QueryManager(
     BackendProvider provider,
     QueryManagerState state)
     : state(std::move(state)),
-      backends(std::move(workerCatalog), std::move(provider))
-      // TMP planStore(std::make_unique<FileQueryPlanStore>("/tmp/nes-worker-store"))
+      backends(std::move(workerCatalog), std::move(provider)),
+      config{.useEtcd = false}
 {
-    NES_INFO("QueryManager startup: attempting restore from plan store");
-
-    if (!planStore) {
-        NES_INFO("QueryManager restore skipped: no planStore configured");
-        return;
-    }
-
-    auto storedPlans = planStore->loadAll();
-    NES_INFO("QueryManager restore: found {} persisted plan(s)", storedPlans.size());
-
-    if (storedPlans.empty()) {
-        return;
-    }
-
-    const auto workers = backends.getAllWorkers();
-    if (workers.empty()) {
-        NES_INFO("QueryManager restore aborted: no workers available at startup");
-        return;
-    }
-
-    for (const auto& [queryId, logicalPlan] : storedPlans)
-    {
-        std::unordered_map<GrpcAddr, std::vector<LogicalPlan>> localPlans;
-
-        for (const auto& worker : workers) {
-            localPlans[worker.grpc].push_back(logicalPlan);
-        }
-
-        DecomposedLogicalPlan<GrpcAddr> decomposed{std::move(localPlans)};
-        DistributedLogicalPlan dplan{std::move(decomposed), logicalPlan};
-        dplan.setQueryId(queryId);
-
-        const auto result = registerQuery(dplan);
-        if (!result) {
-            NES_ERROR(
-                "QueryManager restore: failed to restore query {}: {}",
-                queryId,
-                result.error().what());
-        } else {
-            NES_INFO("QueryManager restore: restored query {}", *result);
-        }
-    }
+    NES_INFO("QueryManager initialized with GRPC backends (push mode)");
 }
-
 
 QueryManager::QueryManager(
     SharedPtr<WorkerCatalog> workerCatalog,
     BackendProvider provider)
     : backends(std::move(workerCatalog), std::move(provider)),
-      planStore(std::make_unique<FileQueryPlanStore>("/tmp/nes-worker-store"))
+      planStore(std::make_unique<FileQueryPlanStore>("/tmp/nes-worker-store")),
+      config{.useEtcd = false}
 {
-    // === Recovery path (Option B) ===
-    // Load persisted LogicalPlans and rebuild DistributedLogicalPlans.
-    // Without a planner/distributor, we conservatively assign the plan
-    // to all available workers.
-
+    NES_INFO("QueryManager initialized with GRPC backends and file-based plan store");
+    
+    // Recovery from file store (legacy behavior)
     auto storedPlans = planStore->loadAll();
     for (const auto& [id, logicalPlan] : storedPlans)
     {
@@ -191,8 +149,100 @@ QueryManager::QueryManager(
     }
 }
 
+QueryManager::QueryManager(
+    SharedPtr<WorkerCatalog> workerCatalog,
+    BackendProvider provider,
+    QueryManagerConfiguration config)
+    : backends(std::move(workerCatalog), std::move(provider)),
+      config(std::move(config))
+{
+    if (this->config.useEtcd)
+    {
+        NES_INFO("QueryManager initialized with etcd store (pull mode) at {}",
+                 this->config.etcdConfig.endpoints);
+        
+        etcdStore = std::make_unique<EtcdQueryStore>(this->config.etcdConfig);
+        
+        if (!etcdStore->isConnected())
+        {
+            NES_WARNING("QueryManager: etcd connection check failed, queries may not be persisted");
+        }
+        
+        // In pull mode, workers fetch their own state from etcd.
+        // We only need to load query IDs for local state tracking.
+        auto queryIdsResult = etcdStore->getAllQueryIds();
+        if (queryIdsResult)
+        {
+            NES_INFO("QueryManager: found {} existing queries in etcd", queryIdsResult->size());
+            for (const auto& queryId : *queryIdsResult)
+            {
+                // We don't have the full DistributedQuery info without querying each worker,
+                // but we track the query ID for status queries
+                state.queries.emplace(queryId, DistributedQuery{});
+            }
+        }
+        else
+        {
+            NES_WARNING("QueryManager: failed to load queries from etcd: {}",
+                        queryIdsResult.error().what());
+        }
+    }
+    else
+    {
+        NES_INFO("QueryManager initialized with GRPC backends (push mode)");
+    }
+}
+
+/* ============================
+ * QueryManager - Registration
+ * ============================ */
+
 std::expected<DistributedQueryId, Exception>
 QueryManager::registerQuery(const DistributedLogicalPlan& plan)
+{
+    if (config.useEtcd)
+    {
+        return registerQueryViaEtcd(plan);
+    }
+    return registerQueryViaGrpc(plan);
+}
+
+std::expected<DistributedQueryId, Exception>
+QueryManager::registerQueryViaEtcd(const DistributedLogicalPlan& plan)
+{
+    auto id = plan.getQueryId();
+    if (id == DistributedQueryId(DistributedQueryId::INVALID))
+    {
+        id = uniqueDistributedQueryId(state);
+    }
+    else if (state.queries.contains(id))
+    {
+        return std::unexpected(QueryAlreadyRegistered("{}", id));
+    }
+
+    NES_INFO("QueryManager: registering query {} via etcd", id);
+
+    // Create a mutable copy to set the query ID
+    DistributedLogicalPlan mutablePlan = plan;
+    mutablePlan.setQueryId(id);
+
+    // Persist to etcd - workers will poll and pick up the plan
+    auto persistResult = etcdStore->persistQuery(id, mutablePlan);
+    if (!persistResult)
+    {
+        return std::unexpected(persistResult.error());
+    }
+
+    // Track locally (for status queries)
+    // Note: In pull mode, we don't have LocalQueryIds until workers report back
+    state.queries.emplace(id, DistributedQuery{});
+
+    NES_INFO("QueryManager: query {} persisted to etcd, workers will poll for it", id);
+    return id;
+}
+
+std::expected<DistributedQueryId, Exception>
+QueryManager::registerQueryViaGrpc(const DistributedLogicalPlan& plan)
 {
     std::unordered_map<GrpcAddr, std::vector<LocalQueryId>> localQueries;
 
@@ -203,10 +253,10 @@ QueryManager::registerQuery(const DistributedLogicalPlan& plan)
     }
     else if (state.queries.contains(id))
     {
-        throw QueryAlreadyRegistered("{}", id);
+        return std::unexpected(QueryAlreadyRegistered("{}", id));
     }
 
-    // Persist intent (LogicalPlan), NOT derived distributed state
+    // Persist intent (LogicalPlan) if planStore is configured
     if (planStore)
     {
         planStore->persist(id, plan.getGlobalPlan());
@@ -234,9 +284,26 @@ QueryManager::registerQuery(const DistributedLogicalPlan& plan)
     return id;
 }
 
+/* ============================
+ * QueryManager - Start/Stop
+ * ============================ */
+
 std::expected<void, std::vector<Exception>>
 QueryManager::start(DistributedQueryId queryId)
 {
+    if (config.useEtcd)
+    {
+        // In pull mode, workers automatically start queries when they poll etcd
+        // This is a no-op, but we validate the query exists
+        if (!state.queries.contains(queryId))
+        {
+            return std::unexpected(std::vector{QueryNotFound("{}", queryId)});
+        }
+        NES_INFO("QueryManager: start() called for query {} (pull mode - workers auto-start)", queryId);
+        return {};
+    }
+
+    // GRPC mode - actively push start command
     auto queryResult = getQuery(queryId);
     if (!queryResult)
     {
@@ -260,50 +327,21 @@ QueryManager::start(DistributedQueryId queryId)
     return {};
 }
 
-std::expected<DistributedQueryStatus, std::vector<Exception>>
-QueryManager::status(const DistributedQueryId& queryId) const
-{
-    auto queryResult = getQuery(queryId);
-    if (!queryResult)
-    {
-        return std::unexpected(std::vector{queryResult.error()});
-    }
-
-    std::unordered_map<
-        GrpcAddr,
-        std::unordered_map<LocalQueryId, std::expected<LocalQueryStatus, Exception>>>
-        localStatusResults;
-
-    for (const auto& [grpcAddr, localQueryId] : queryResult->iterate())
-    {
-        localStatusResults[grpcAddr][localQueryId] =
-            backends.at(grpcAddr).status(localQueryId);
-    }
-
-    return DistributedQueryStatus{
-        .localStatusSnapshots = std::move(localStatusResults),
-        .queryId = queryId};
-}
-
-std::vector<DistributedQueryId> QueryManager::queries() const
-{
-    return state.queries | std::views::keys | std::ranges::to<std::vector>();
-}
-
-std::expected<DistributedWorkerStatus, Exception>
-QueryManager::workerStatus(std::chrono::system_clock::time_point after) const
-{
-    DistributedWorkerStatus status;
-    for (const auto& [grpcAddr, backend] : backends)
-    {
-        status.workerStatus.emplace(grpcAddr, backend->workerStatus(after));
-    }
-    return status;
-}
-
 std::expected<void, std::vector<Exception>>
 QueryManager::stop(DistributedQueryId queryId)
 {
+    if (config.useEtcd)
+    {
+        // In pull mode, stopping = removing from etcd
+        // Workers will stop the query on their next poll
+        NES_INFO("QueryManager: stop() for query {} - will remove from etcd", queryId);
+        // Don't actually remove yet - that's done in unregister
+        // For now, we'd need a "stopped" state in etcd, but for minimal impl,
+        // stop and unregister are combined
+        return {};
+    }
+
+    // GRPC mode
     auto queryResult = getQuery(queryId);
     if (!queryResult)
     {
@@ -327,8 +365,43 @@ QueryManager::stop(DistributedQueryId queryId)
     return {};
 }
 
+/* ============================
+ * QueryManager - Unregister
+ * ============================ */
+
 std::expected<void, std::vector<Exception>>
 QueryManager::unregister(DistributedQueryId queryId)
+{
+    if (config.useEtcd)
+    {
+        return unregisterViaEtcd(queryId);
+    }
+    return unregisterViaGrpc(queryId);
+}
+
+std::expected<void, std::vector<Exception>>
+QueryManager::unregisterViaEtcd(DistributedQueryId queryId)
+{
+    if (!state.queries.contains(queryId))
+    {
+        return std::unexpected(std::vector{QueryNotFound("{}", queryId)});
+    }
+
+    NES_INFO("QueryManager: unregistering query {} from etcd", queryId);
+
+    auto eraseResult = etcdStore->eraseQuery(queryId);
+    if (!eraseResult)
+    {
+        return std::unexpected(std::vector{eraseResult.error()});
+    }
+
+    state.queries.erase(queryId);
+    NES_INFO("QueryManager: query {} removed from etcd, workers will stop on next poll", queryId);
+    return {};
+}
+
+std::expected<void, std::vector<Exception>>
+QueryManager::unregisterViaGrpc(DistributedQueryId queryId)
 {
     auto queryResult = getQuery(queryId);
     if (!queryResult)
@@ -361,13 +434,86 @@ QueryManager::unregister(DistributedQueryId queryId)
     return {};
 }
 
+/* ============================
+ * QueryManager - Status
+ * ============================ */
+
+std::expected<DistributedQueryStatus, std::vector<Exception>>
+QueryManager::status(const DistributedQueryId& queryId) const
+{
+    if (config.useEtcd)
+    {
+        // In pull mode, we don't have direct access to worker status
+        // We'd need workers to report status back or query them separately
+        // For minimal implementation, return a basic status
+        if (!state.queries.contains(queryId))
+        {
+            return std::unexpected(std::vector{QueryNotFound("{}", queryId)});
+        }
+        
+        // Return empty status - full status requires worker integration
+        return DistributedQueryStatus{
+            .localStatusSnapshots = {},
+            .queryId = queryId
+        };
+    }
+
+    // GRPC mode - query each worker
+    auto queryResult = getQuery(queryId);
+    if (!queryResult)
+    {
+        return std::unexpected(std::vector{queryResult.error()});
+    }
+
+    std::unordered_map<
+        GrpcAddr,
+        std::unordered_map<LocalQueryId, std::expected<LocalQueryStatus, Exception>>>
+        localStatusResults;
+
+    for (const auto& [grpcAddr, localQueryId] : queryResult->iterate())
+    {
+        localStatusResults[grpcAddr][localQueryId] =
+            backends.at(grpcAddr).status(localQueryId);
+    }
+
+    return DistributedQueryStatus{
+        .localStatusSnapshots = std::move(localStatusResults),
+        .queryId = queryId};
+}
+
+std::vector<DistributedQueryId> QueryManager::queries() const
+{
+    if (config.useEtcd && etcdStore)
+    {
+        // Get live list from etcd
+        auto result = etcdStore->getAllQueryIds();
+        if (result)
+        {
+            return *result;
+        }
+        NES_WARNING("QueryManager: failed to fetch query list from etcd, using cached state");
+    }
+    return state.queries | std::views::keys | std::ranges::to<std::vector>();
+}
+
+std::expected<DistributedWorkerStatus, Exception>
+QueryManager::workerStatus(std::chrono::system_clock::time_point after) const
+{
+    DistributedWorkerStatus status;
+    for (const auto& [grpcAddr, backend] : backends)
+    {
+        status.workerStatus.emplace(grpcAddr, backend->workerStatus(after));
+    }
+    return status;
+}
+
 std::expected<DistributedQuery, Exception>
 QueryManager::getQuery(DistributedQueryId query) const
 {
     auto it = state.queries.find(query);
     if (it == state.queries.end())
     {
-        return std::unexpected(Exception("Query not found", 0));
+        return std::unexpected(QueryNotFound("{}", query));
     }
     return it->second;
 }

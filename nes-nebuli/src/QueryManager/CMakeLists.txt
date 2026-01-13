@@ -13,19 +13,20 @@
 add_source_files(nes-query-manager-grpc
         GRPCQuerySubmissionBackend.cpp
         QueryManager.cpp
+        EtcdQueryStore.cpp
 )
 
 add_source_files(nes-query-manager-embedded
         EmbeddedWorkerQuerySubmissionBackend.cpp)
 
-add_source_files(nes-query-manager-grpc # Janhvi
+add_source_files(nes-query-manager-grpc
         GRPCQuerySubmissionBackend.cpp
         QueryManager.cpp
         FileQueryPlanStore.cpp
+        EtcdQueryStore.cpp
 )
 
-add_source_files(nes-query-manager-embedded # Janhvi
+add_source_files(nes-query-manager-embedded
         EmbeddedWorkerQuerySubmissionBackend.cpp
         FileQueryPlanStore.cpp
 )
-
