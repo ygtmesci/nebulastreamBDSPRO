@@ -115,7 +115,7 @@ QueryManager::QueryManager(
     QueryManagerState state)
     : state(std::move(state)),
       backends(std::move(workerCatalog), std::move(provider)),
-      config{.useEtcd = false}
+      config{.useEtcd = false, .etcdConfig = {}}
 {
     NES_INFO("QueryManager initialized with GRPC backends (push mode)");
 }
@@ -125,7 +125,7 @@ QueryManager::QueryManager(
     BackendProvider provider)
     : backends(std::move(workerCatalog), std::move(provider)),
       planStore(std::make_unique<FileQueryPlanStore>("/tmp/nes-worker-store")),
-      config{.useEtcd = false}
+      config{.useEtcd = false, .etcdConfig = {}}
 {
     NES_INFO("QueryManager initialized with GRPC backends and file-based plan store");
     
