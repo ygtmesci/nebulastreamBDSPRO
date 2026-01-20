@@ -24,7 +24,7 @@
 #include <Util/Logger/Logger.hpp>
 #include <ErrorHandling.hpp>
 
-#include <etcd/Client.hpp>
+#include <etcd/SyncClient.hpp>
 #include <etcd/Response.hpp>
 
 namespace NES {
