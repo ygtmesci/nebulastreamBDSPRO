@@ -86,16 +86,18 @@ EtcdQueryStore::extractQueryIdFromKey(const std::string& key) const
     // Example: /nes/queries/swift_arabian/assignments/localhost_8080
     
     if (key.rfind(config.keyPrefix, 0) != 0) {
-        return std::unexpected(InvalidArgument(
-            "Key '{}' does not start with prefix '{}'", key, config.keyPrefix));
+        return std::unexpected(Exception(
+                fmt::format("Key '{}' does not start with prefix '{}'", key, config.keyPrefix), 
+                ErrorCode::InvalidArgument));
     }
     
     std::string remainder = key.substr(config.keyPrefix.size());
     auto slashPos = remainder.find('/');
     
     if (slashPos == std::string::npos) {
-        return std::unexpected(InvalidArgument(
-            "Cannot extract query ID from key '{}'", key));
+        return std::unexpected(Exception(
+            fmt::format("Cannot extract query ID from key '{}'", key, config.keyPrefix), 
+            ErrorCode::InvalidArgument));
     }
     
     return DistributedQueryId(remainder.substr(0, slashPos));
@@ -108,8 +110,9 @@ EtcdQueryStore::extractWorkerAddrFromKey(const std::string& key) const
     auto assignmentsPos = key.find(ASSIGNMENTS_SEGMENT);
     
     if (assignmentsPos == std::string::npos) {
-        return std::unexpected(InvalidArgument(
-            "Cannot extract worker address from key '{}'", key));
+        return std::unexpected(Exception(
+            fmt::format("Cannot extract worker address from key '{}'", key, config.keyPrefix), 
+            ErrorCode::InvalidArgument));
     }
     
     std::string encodedAddr = key.substr(
