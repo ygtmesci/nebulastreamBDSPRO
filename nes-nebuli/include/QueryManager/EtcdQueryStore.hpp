@@ -26,7 +26,7 @@
 #include <WorkerConfig.hpp>
 
 namespace etcd {
-class Client;
+class SyncClient;
 }
 
 namespace NES {
@@ -104,7 +104,7 @@ private:
     extractWorkerAddrFromKey(const std::string& key) const;
 
     EtcdConfiguration config;
-    std::unique_ptr<etcd::Client> client;
+    std::unique_ptr<etcd::SyncClient> client;
 };
 
 } // namespace NES

@@ -14,8 +14,10 @@
 
 #include <QueryManager/EtcdQueryStore.hpp>
 
+#include <algorithm>
 #include <regex>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -24,8 +26,8 @@
 #include <Util/Logger/Logger.hpp>
 #include <ErrorHandling.hpp>
 
+// etcd-cpp-apiv3 headers
 #include <etcd/SyncClient.hpp>
-#include <etcd/Response.hpp>
 
 namespace NES {
 
@@ -52,7 +54,7 @@ GrpcAddr decodeWorkerAddr(const std::string& encoded) {
 
 EtcdQueryStore::EtcdQueryStore(EtcdConfiguration config)
     : config(std::move(config))
-    , client(std::make_unique<etcd::Client>(this->config.endpoints))
+    , client(std::make_unique<etcd::SyncClient>(this->config.endpoints))
 {
     NES_INFO("EtcdQueryStore: connecting to {} with prefix '{}'", 
              this->config.endpoints, this->config.keyPrefix);
@@ -83,7 +85,7 @@ EtcdQueryStore::extractQueryIdFromKey(const std::string& key) const
     // Key format: {prefix}{queryId}/assignments/{workerAddr}
     // Example: /nes/queries/swift_arabian/assignments/localhost_8080
     
-    if (!key.starts_with(config.keyPrefix)) {
+    if (key.rfind(config.keyPrefix, 0) != 0) {
         return std::unexpected(InvalidArgument(
             "Key '{}' does not start with prefix '{}'", key, config.keyPrefix));
     }
@@ -113,6 +115,12 @@ EtcdQueryStore::extractWorkerAddrFromKey(const std::string& key) const
     std::string encodedAddr = key.substr(
         assignmentsPos + std::string(ASSIGNMENTS_SEGMENT).size());
     
+    // Handle case where there might be additional path segments (e.g., fragment index)
+    auto nextSlash = encodedAddr.find('/');
+    if (nextSlash != std::string::npos) {
+        encodedAddr = encodedAddr.substr(0, nextSlash);
+    }
+    
     return decodeWorkerAddr(encodedAddr);
 }
 
@@ -126,7 +134,7 @@ EtcdQueryStore::persistQuery(
     
     for (const auto& [workerAddr, fragments] : plan) {
         // For now, we assume one fragment per worker
-        // If multiple fragments exist, we concatenate them or store separately
+        // If multiple fragments exist, we store them separately
         for (size_t i = 0; i < fragments.size(); ++i) {
             const auto& fragment = fragments[i];
             
@@ -147,12 +155,12 @@ EtcdQueryStore::persistQuery(
                     queryId.getRawValue(), ErrorCode::UnknownException));
             }
             
-            // Write to etcd
-            auto response = client->put(key, serialized).get();
+            // Write to etcd using set() - the correct method name in etcd-cpp-apiv3
+            etcd::Response response = client->set(key, serialized);
             
             if (!response.is_ok()) {
                 return std::unexpected(Exception(
-                    "etcd put failed for key '" + key + "': " + 
+                    "etcd set failed for key '" + key + "': " + 
                     response.error_message(), ErrorCode::UnknownException));
             }
             
@@ -172,16 +180,21 @@ EtcdQueryStore::eraseQuery(const DistributedQueryId& queryId)
     
     NES_DEBUG("EtcdQueryStore: erasing query {} (prefix: {})", queryId, prefix);
     
-    auto response = client->rm_range(prefix).get();
+    // Use rmdir with recursive=true to delete all keys under the prefix
+    etcd::Response response = client->rmdir(prefix, true);
     
     if (!response.is_ok()) {
+        // Error code 100 means "key not found" which is acceptable for delete
+        if (response.error_code() == 100) {
+            NES_DEBUG("EtcdQueryStore: query {} not found in etcd (already deleted?)", queryId);
+            return {};
+        }
         return std::unexpected(Exception(
-            "etcd delete failed for prefix '" + prefix + "': " + 
+            "etcd rmdir failed for prefix '" + prefix + "': " + 
             response.error_message(), ErrorCode::UnknownException));
     }
     
-    NES_INFO("EtcdQueryStore: erased query {} ({} keys deleted)", 
-             queryId, response.keys().size());
+    NES_INFO("EtcdQueryStore: erased query {}", queryId);
     return {};
 }
 
@@ -192,32 +205,31 @@ EtcdQueryStore::getAssignmentsForWorker(const GrpcAddr& workerAddr)
     
     std::vector<QueryAssignment> assignments;
     
-    // Get all keys under the query prefix
-    auto response = client->ls(config.keyPrefix).get();
+    // Use ls() to get all keys under the query prefix
+    etcd::Response response = client->ls(config.keyPrefix);
     
     if (!response.is_ok()) {
+        // Error code 100 means "key not found" - no queries exist yet
+        if (response.error_code() == 100) {
+            NES_DEBUG("EtcdQueryStore: no queries found in etcd");
+            return assignments;
+        }
         return std::unexpected(Exception(
             "etcd ls failed: " + response.error_message(), 
             ErrorCode::UnknownException));
     }
     
-    // Now fetch all keys to find those assigned to this worker
-    auto rangeResponse = client->range(config.keyPrefix, 
-                                        config.keyPrefix + "\xFF").get();
-    
-    if (!rangeResponse.is_ok()) {
-        return std::unexpected(Exception(
-            "etcd range failed: " + rangeResponse.error_message(),
-            ErrorCode::UnknownException));
-    }
-    
     std::string encodedWorkerAddr = encodeWorkerAddr(workerAddr);
     
-    for (const auto& kv : rangeResponse.kvs()) {
-        const std::string& key = kv.key();
+    // Get keys from the response
+    const auto& keys = response.keys();
+    
+    for (size_t i = 0; i < keys.size(); ++i) {
+        const std::string& key = keys[i];
         
         // Check if this key is for our worker
-        if (key.find(ASSIGNMENTS_SEGMENT + encodedWorkerAddr) == std::string::npos) {
+        std::string workerSegment = std::string(ASSIGNMENTS_SEGMENT) + encodedWorkerAddr;
+        if (key.find(workerSegment) == std::string::npos) {
             continue;
         }
         
@@ -228,9 +240,16 @@ EtcdQueryStore::getAssignmentsForWorker(const GrpcAddr& workerAddr)
             continue;
         }
         
+        // Get the value - need to fetch it separately since ls() may not return values
+        etcd::Response getResponse = client->get(key);
+        if (!getResponse.is_ok()) {
+            NES_WARNING("EtcdQueryStore: failed to get value for key '{}'", key);
+            continue;
+        }
+        
         // Deserialize plan
         SerializableQueryPlan proto;
-        if (!proto.ParseFromString(kv.as_string())) {
+        if (!proto.ParseFromString(getResponse.value().as_string())) {
             NES_WARNING("EtcdQueryStore: failed to parse plan from key '{}'", key);
             continue;
         }
@@ -258,19 +277,22 @@ EtcdQueryStore::getAllQueryIds()
 {
     NES_DEBUG("EtcdQueryStore: fetching all query IDs");
     
-    auto response = client->range(config.keyPrefix, 
-                                   config.keyPrefix + "\xFF").get();
+    etcd::Response response = client->ls(config.keyPrefix);
     
     if (!response.is_ok()) {
+        // Error code 100 means "key not found" - no queries exist
+        if (response.error_code() == 100) {
+            return std::vector<DistributedQueryId>{};
+        }
         return std::unexpected(Exception(
-            "etcd range failed: " + response.error_message(),
+            "etcd ls failed: " + response.error_message(),
             ErrorCode::UnknownException));
     }
     
     std::unordered_set<std::string> uniqueIds;
     
-    for (const auto& kv : response.kvs()) {
-        auto queryIdResult = extractQueryIdFromKey(kv.key());
+    for (const auto& key : response.keys()) {
+        auto queryIdResult = extractQueryIdFromKey(key);
         if (queryIdResult) {
             uniqueIds.insert(queryIdResult->getRawValue());
         }
@@ -289,9 +311,11 @@ EtcdQueryStore::getAllQueryIds()
 bool EtcdQueryStore::isConnected() const 
 {
     // Simple health check - try to get a non-existent key
-    auto response = client->get("/__health_check__").get();
-    // Even if key doesn't exist, connection is OK if no error
-    return response.error_code() == 0 || response.error_code() == 100; // 100 = key not found
+    etcd::Response response = client->get("/__nes_health_check__");
+    // Even if key doesn't exist, connection is OK if no network error
+    // Error code 100 = key not found (which is fine)
+    // Error code 0 = success
+    return response.error_code() == 0 || response.error_code() == 100;
 }
 
 } // namespace NES
