@@ -33,7 +33,6 @@
 #include <WorkerConfig.hpp>
 #include <WorkerStatus.hpp>
 
-#include <QueryManager/QueryPlanStore.h>
 #include <QueryManager/EtcdQueryStore.hpp>
 
 namespace NES {
@@ -76,11 +75,7 @@ struct QueryManagerState
  * ============================ */
 struct QueryManagerConfiguration
 {
-    /// If true, use etcd for query state storage (pull-based model)
-    /// If false, use GRPC backends (push-based model)
-    bool useEtcd = false;
-    
-    /// etcd configuration (only used if useEtcd is true)
+    /// etcd configuration for query state storage
     EtcdConfiguration etcdConfig;
 };
 
@@ -144,28 +139,18 @@ class QueryManager
 private:
     QueryManagerState state;
     QueryManagerBackends backends;
-    std::unique_ptr<QueryPlanStore> planStore;
     
-    /// etcd-based query store (used when useEtcd is true)
+    /// etcd-based query store
     std::unique_ptr<EtcdQueryStore> etcdStore;
     
     /// Configuration
     QueryManagerConfiguration config;
 
 public:
-    /// Constructor with GRPC backends (legacy push-based model)
+    /// Constructor - always uses etcd for query persistence
     QueryManager(SharedPtr<WorkerCatalog> workerCatalog,
                  BackendProvider provider,
-                 QueryManagerState state);
-
-    /// Constructor with GRPC backends (legacy)
-    QueryManager(SharedPtr<WorkerCatalog> workerCatalog,
-                 BackendProvider provider);
-
-    /// Constructor with etcd store (new pull-based model)
-    QueryManager(SharedPtr<WorkerCatalog> workerCatalog,
-                 BackendProvider provider,
-                 QueryManagerConfiguration config);
+                 QueryManagerConfiguration config = {});
 
     [[nodiscard]] std::expected<DistributedQueryId, Exception>
     registerQuery(const DistributedLogicalPlan& plan);
@@ -195,21 +180,9 @@ public:
     getRunningQueries() const;
 
 private:
-    /// Register query using etcd (pull-based model)
+    /// Persist query to etcd
     [[nodiscard]] std::expected<DistributedQueryId, Exception>
-    registerQueryViaEtcd(const DistributedLogicalPlan& plan);
-
-    /// Register query using GRPC backends (push-based model)
-    [[nodiscard]] std::expected<DistributedQueryId, Exception>
-    registerQueryViaGrpc(const DistributedLogicalPlan& plan);
-
-    /// Unregister query using etcd
-    std::expected<void, std::vector<Exception>>
-    unregisterViaEtcd(DistributedQueryId query);
-
-    /// Unregister query using GRPC backends
-    std::expected<void, std::vector<Exception>>
-    unregisterViaGrpc(DistributedQueryId query);
+    persistQueryToEtcd(const DistributedLogicalPlan& plan);
 };
 
 } // namespace NES
