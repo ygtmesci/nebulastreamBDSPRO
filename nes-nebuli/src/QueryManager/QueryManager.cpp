@@ -142,6 +142,25 @@ QueryManager::QueryManager(
     }
 }
 
+QueryManager::QueryManager(
+    SharedPtr<WorkerCatalog> workerCatalog,
+    BackendProvider provider,
+    QueryManagerState initialState)
+    : state(std::move(initialState)),
+      backends(std::move(workerCatalog), std::move(provider)),
+      config{}
+{
+    NES_INFO("QueryManager: initializing with etcd at {} (with initial state)",
+             this->config.etcdConfig.endpoints);
+    
+    etcdStore = std::make_unique<EtcdQueryStore>(this->config.etcdConfig);
+    
+    if (!etcdStore->isConnected())
+    {
+        NES_WARNING("QueryManager: etcd connection check failed");
+    }
+}
+
 /* ============================
  * QueryManager - Registration
  * ============================ */

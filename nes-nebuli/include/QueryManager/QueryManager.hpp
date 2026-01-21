@@ -152,6 +152,11 @@ public:
                  BackendProvider provider,
                  QueryManagerConfiguration config = {});
 
+    /// Legacy constructor with initial state (still uses etcd)
+    QueryManager(SharedPtr<WorkerCatalog> workerCatalog,
+                 BackendProvider provider,
+                 QueryManagerState state);
+
     [[nodiscard]] std::expected<DistributedQueryId, Exception>
     registerQuery(const DistributedLogicalPlan& plan);
 

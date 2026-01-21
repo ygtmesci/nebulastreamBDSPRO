@@ -87,8 +87,7 @@ EtcdQueryStore::extractQueryIdFromKey(const std::string& key) const
     
     if (key.rfind(config.keyPrefix, 0) != 0) {
         return std::unexpected(Exception(
-                fmt::format("Key '{}' does not start with prefix '{}'", key, config.keyPrefix), 
-                ErrorCode::UnknownException));
+            "Key does not start with expected prefix", ErrorCode::UnknownException));
     }
     
     std::string remainder = key.substr(config.keyPrefix.size());
@@ -96,8 +95,7 @@ EtcdQueryStore::extractQueryIdFromKey(const std::string& key) const
     
     if (slashPos == std::string::npos) {
         return std::unexpected(Exception(
-            fmt::format("Cannot extract query ID from key '{}'", key, config.keyPrefix), 
-            ErrorCode::UnknownException));
+            "Cannot extract query ID from key", ErrorCode::UnknownException));
     }
     
     return DistributedQueryId(remainder.substr(0, slashPos));
@@ -111,8 +109,7 @@ EtcdQueryStore::extractWorkerAddrFromKey(const std::string& key) const
     
     if (assignmentsPos == std::string::npos) {
         return std::unexpected(Exception(
-            fmt::format("Cannot extract worker address from key '{}'", key, config.keyPrefix), 
-            ErrorCode::UnknownException));
+            "Cannot extract worker address from key", ErrorCode::UnknownException));
     }
     
     std::string encodedAddr = key.substr(
