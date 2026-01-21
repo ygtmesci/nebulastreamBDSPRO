@@ -33,7 +33,7 @@ namespace NES {
 
 /// Configuration for connecting to etcd
 struct EtcdConfiguration {
-    std::string endpoints = "http://localhost:2379";
+    std::string endpoints = "http://etcd:2379";
     std::string keyPrefix = "/nes/queries/";
 };
 
