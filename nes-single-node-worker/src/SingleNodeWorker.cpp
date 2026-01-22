@@ -96,7 +96,7 @@ public:
     }
 
     std::expected<void, Exception> stopQuery(const std::string& distributedQueryId) override {
-        LocalQueryId localId;
+        LocalQueryId localId = INVALID_LOCAL_QUERY_ID;
         {
             std::lock_guard<std::mutex> lock(worker.queryMapMutex);
             auto it = worker.distributedToLocalMap.find(distributedQueryId);
