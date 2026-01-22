@@ -13,58 +13,68 @@
 */
 
 #pragma once
-
-#include <chrono>
-#include <cstdint>
 #include <string>
-#include <optional>
+#include <Configuration/WorkerConfiguration.hpp>
+#include <Configurations/BaseConfiguration.hpp>
+#include <Configurations/ScalarOption.hpp>
+#include <Util/URI.hpp>
 
-namespace NES {
+namespace NES
+{
 
-/// Configuration for the SingleNodeWorker
-struct SingleNodeWorkerConfiguration {
-    /// GRPC address this worker listens on (also used as worker identity)
-    std::string grpcAddressUri = "localhost:8080";
-    
-    /// Number of worker threads for query execution
-    uint32_t numWorkerThreads = 4;
-    
-    /// Buffer size for data processing
-    uint32_t bufferSize = 4096;
-    
-    /// Number of buffers in the pool
-    uint32_t numBuffers = 128;
-    
-    // ============================================
-    // Reconciler / etcd configuration
-    // ============================================
-    
-    /// Enable reconciler (pull-based mode with etcd)
-    /// If false, worker operates in traditional GRPC push mode
-    bool enableReconciler = false;
-    
-    /// etcd endpoint(s) for the reconciler
-    /// Can be comma-separated for multiple endpoints
-    std::string etcdEndpoints = "http://etcd:2379";
-    
-    /// Key prefix for queries in etcd
-    std::string etcdKeyPrefix = "/nes/queries/";
-    
-    /// How often the reconciler polls etcd (milliseconds)
-    std::chrono::milliseconds reconcilerPollInterval{1000};
-    
-    // ============================================
-    // Helper methods
-    // ============================================
-    
-    /// Parse configuration from command line arguments
-    static SingleNodeWorkerConfiguration fromCommandLine(int argc, char** argv);
-    
-    /// Parse configuration from environment variables
-    static SingleNodeWorkerConfiguration fromEnvironment();
-    
-    /// Validate configuration, throws if invalid
-    void validate() const;
+class SingleNodeWorkerConfiguration final : public BaseConfiguration
+{
+public:
+    ScalarOption<NES::URI> connection = {"connection", "Connection name. This is the {Hostname}:{PORT}"};
+
+    /// GRPC Server Address URI. By default, it binds to any address and listens on port 8080
+    ScalarOption<NES::URI> grpcAddressUri
+        = {"grpc",
+           "localhost:8080",
+           R"(The address to try to bind to the server in URI form. If
+the scheme name is omitted, "dns:///" is assumed. To bind to any address,
+please use IPv6 any, i.e., [::]:<port>, which also accepts IPv4
+connections.  Valid values include dns:///localhost:1234,
+192.168.1.1:31416, dns:///[::1]:27182, etc.)"};
+
+    /// Enable Google Event Trace logging (Chrome tracing format)
+    BoolOption enableGoogleEventTrace
+        = {"enable_event_trace",
+           "false",
+           "Enable Google Event Trace logging that generates Chrome tracing compatible JSON files for performance analysis."};
+
+    /// Enable etcd-based reconciler for pull-based query management
+    BoolOption enableReconciler
+        = {"enable_reconciler",
+           "false",
+           "Enable the reconciler that polls etcd for query assignments."};
+
+    /// etcd endpoints for reconciler
+    ScalarOption<std::string> etcdEndpoints
+        = {"etcd_endpoints",
+           "http://etcd:2379",
+           "etcd endpoint URL for query state storage."};
+
+    /// etcd key prefix
+    ScalarOption<std::string> etcdKeyPrefix
+        = {"etcd_key_prefix",
+           "/nes/queries/",
+           "Key prefix for query storage in etcd."};
+
+    /// Reconciler poll interval in milliseconds
+    ScalarOption<uint32_t> reconcilerPollIntervalMs
+        = {"reconciler_poll_interval_ms",
+           1000,
+           "How often the reconciler polls etcd for changes (milliseconds)."};
+
+protected:
+    std::vector<BaseOption*> getOptions() override;
+
+    template <typename T>
+    friend void generateHelp(std::ostream& ostream);
+
+public:
+    SingleNodeWorkerConfiguration() = default;
+    WorkerConfiguration workerConfiguration = {"worker", "NodeEngine Configuration"};
 };
-
-} // namespace NES
+}

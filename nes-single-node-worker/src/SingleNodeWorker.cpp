@@ -13,250 +13,321 @@
 */
 
 #include <SingleNodeWorker.hpp>
-#include <SingleNodeWorkerConfiguration.hpp>
-#include <Reconciler.hpp>
 
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <memory>
-#include <unordered_map>
-#include <unordered_set>
-
-#include <Util/Logger/Logger.hpp>
+#include <optional>
+#include <random>
+#include <string>
+#include <utility>
+#include <unistd.h>
+#include <Identifiers/Identifiers.hpp>
+#include <Identifiers/NESStrongType.hpp>
+#include <Identifiers/NESStrongTypeFormat.hpp>
+#include <Listeners/QueryLog.hpp>
+#include <Plans/LogicalPlan.hpp>
+#include <Runtime/Execution/QueryStatus.hpp>
+#include <Runtime/NodeEngineBuilder.hpp>
+#include <Runtime/QueryTerminationType.hpp>
+#include <Util/Logger/impl/NesLogger.hpp>
+#include <Util/PlanRenderer.hpp>
+#include <Util/Pointers.hpp>
+#include <Util/UUID.hpp>
+#include <cpptrace/from_current.hpp>
+#include <CompositeStatisticListener.hpp>
 #include <ErrorHandling.hpp>
+#include <GoogleEventTracePrinter.hpp>
+#include <QueryCompiler.hpp>
+#include <QueryOptimizer.hpp>
+#include <Reconciler.hpp>
+#include <SingleNodeWorkerConfiguration.hpp>
+#include <WorkerStatus.hpp>
 
-namespace NES {
+extern void initReceiverService(const std::string& connectionAddr, const NES::WorkerId& workerId);
+extern void initSenderService(const std::string& connectionAddr, const NES::WorkerId& workerId);
 
-/// Implementation of ReconcilerWorkerInterface that bridges to SingleNodeWorker
+namespace NES
+{
+
+/// Bridge between Reconciler and SingleNodeWorker
 class SingleNodeWorkerReconcilerBridge : public ReconcilerWorkerInterface {
 public:
-    explicit SingleNodeWorkerReconcilerBridge(SingleNodeWorker* worker)
-        : worker(worker) {}
-    
-    std::unordered_set<DistributedQueryId> getRunningQueryIds() const override {
-        return worker->getRunningDistributedQueryIds();
-    }
-    
-    std::expected<LocalQueryId, Exception> 
-    startQuery(const DistributedQueryId& queryId, const LogicalPlan& plan) override {
-        return worker->registerAndStartQuery(queryId, plan);
-    }
-    
-    std::expected<void, Exception>
-    stopQuery(const DistributedQueryId& queryId) override {
-        return worker->stopAndUnregisterQuery(queryId);
-    }
-    
-private:
-    SingleNodeWorker* worker;
-};
+    explicit SingleNodeWorkerReconcilerBridge(SingleNodeWorker& worker) : worker(worker) {}
 
-/// SingleNodeWorker implementation with Reconciler support
-class SingleNodeWorker {
-public:
-    explicit SingleNodeWorker(SingleNodeWorkerConfiguration config)
-        : config(std::move(config))
-    {
-        NES_INFO("SingleNodeWorker: initializing at {}", this->config.grpcAddressUri);
-        
-        // Initialize node engine, compiler, etc.
-        initializeEngine();
-        
-        // If reconciler is enabled, set it up
-        if (this->config.enableReconciler) {
-            initializeReconciler();
-        }
-    }
-    
-    ~SingleNodeWorker() {
-        shutdown();
-    }
-    
-    /// Start the worker (including reconciler if enabled)
-    void start() {
-        NES_INFO("SingleNodeWorker: starting");
-        
-        // Start GRPC server (for status queries, etc.)
-        startGrpcServer();
-        
-        // Start reconciler if enabled
-        if (reconciler) {
-            reconciler->start();
-        }
-        
-        NES_INFO("SingleNodeWorker: started successfully");
-    }
-    
-    /// Shutdown the worker
-    void shutdown() {
-        NES_INFO("SingleNodeWorker: shutting down");
-        
-        // Stop reconciler first
-        if (reconciler) {
-            reconciler->stop();
-        }
-        
-        // Stop all running queries
-        stopAllQueries();
-        
-        // Stop GRPC server
-        stopGrpcServer();
-        
-        NES_INFO("SingleNodeWorker: shutdown complete");
-    }
-    
-    // ========================================
-    // Methods called by Reconciler
-    // ========================================
-    
-    /// Get all running distributed query IDs
-    std::unordered_set<DistributedQueryId> getRunningDistributedQueryIds() const {
-        std::lock_guard<std::mutex> lock(queryMapMutex);
-        
-        std::unordered_set<DistributedQueryId> result;
-        for (const auto& [distId, localId] : distributedToLocalQueryMap) {
+    std::unordered_set<std::string> getRunningDistributedQueryIds() const override {
+        std::lock_guard<std::mutex> lock(worker.queryMapMutex);
+        std::unordered_set<std::string> result;
+        for (const auto& [distId, localId] : worker.distributedToLocalMap) {
             result.insert(distId);
         }
         return result;
     }
-    
-    /// Register and start a query from a LogicalPlan
-    std::expected<LocalQueryId, Exception> 
-    registerAndStartQuery(const DistributedQueryId& distributedQueryId, 
-                          const LogicalPlan& plan) {
-        NES_INFO("SingleNodeWorker: registering query {} from reconciler", 
-                 distributedQueryId);
-        
-        // Check if already running
-        {
-            std::lock_guard<std::mutex> lock(queryMapMutex);
-            if (distributedToLocalQueryMap.contains(distributedQueryId)) {
-                NES_WARNING("SingleNodeWorker: query {} already running", distributedQueryId);
-                return distributedToLocalQueryMap.at(distributedQueryId);
-            }
+
+    std::expected<LocalQueryId, Exception> startQuery(
+        const std::string& distributedQueryId, 
+        LogicalPlan plan) override 
+    {
+        // Register the query
+        auto registerResult = worker.registerQuery(std::move(plan));
+        if (!registerResult) {
+            return std::unexpected(registerResult.error());
         }
         
-        // Compile the plan
-        // auto physicalPlan = compiler->compile(localOptimizer->optimize(plan));
-        
-        // Register with node engine
-        // auto localQueryId = nodeEngine->registerQuery(physicalPlan);
-        
-        // For now, generate a placeholder LocalQueryId
-        auto localQueryId = LocalQueryId(generateUniqueId());
+        LocalQueryId localId = *registerResult;
         
         // Start the query
-        // nodeEngine->startQuery(localQueryId);
+        auto startResult = worker.startQuery(localId);
+        if (!startResult) {
+            worker.unregisterQuery(localId);
+            return std::unexpected(startResult.error());
+        }
         
         // Track the mapping
         {
-            std::lock_guard<std::mutex> lock(queryMapMutex);
-            distributedToLocalQueryMap[distributedQueryId] = localQueryId;
-            localToDistributedQueryMap[localQueryId] = distributedQueryId;
+            std::lock_guard<std::mutex> lock(worker.queryMapMutex);
+            worker.distributedToLocalMap[distributedQueryId] = localId;
+            worker.localToDistributedMap[localId] = distributedQueryId;
         }
         
-        NES_INFO("SingleNodeWorker: started query {} (local ID: {})", 
-                 distributedQueryId, localQueryId);
-        
-        return localQueryId;
+        return localId;
     }
-    
-    /// Stop and unregister a query
-    std::expected<void, Exception>
-    stopAndUnregisterQuery(const DistributedQueryId& distributedQueryId) {
-        NES_INFO("SingleNodeWorker: stopping query {}", distributedQueryId);
-        
-        LocalQueryId localQueryId;
-        
-        // Find the local query ID
+
+    std::expected<void, Exception> stopQuery(const std::string& distributedQueryId) override {
+        LocalQueryId localId;
         {
-            std::lock_guard<std::mutex> lock(queryMapMutex);
-            auto it = distributedToLocalQueryMap.find(distributedQueryId);
-            if (it == distributedToLocalQueryMap.end()) {
-                return std::unexpected(QueryNotFound(
-                    "Query {} not found", distributedQueryId));
+            std::lock_guard<std::mutex> lock(worker.queryMapMutex);
+            auto it = worker.distributedToLocalMap.find(distributedQueryId);
+            if (it == worker.distributedToLocalMap.end()) {
+                return std::unexpected(Exception("Query not found: " + distributedQueryId, 
+                                                  ErrorCode::UnknownException));
             }
-            localQueryId = it->second;
+            localId = it->second;
         }
         
         // Stop the query
-        // nodeEngine->stopQuery(localQueryId);
-        // nodeEngine->unregisterQuery(localQueryId);
+        auto stopResult = worker.stopQuery(localId, QueryTerminationType::Graceful);
+        if (!stopResult) {
+            return std::unexpected(stopResult.error());
+        }
+        
+        // Unregister the query
+        auto unregisterResult = worker.unregisterQuery(localId);
+        if (!unregisterResult) {
+            return std::unexpected(unregisterResult.error());
+        }
         
         // Remove from tracking
         {
-            std::lock_guard<std::mutex> lock(queryMapMutex);
-            distributedToLocalQueryMap.erase(distributedQueryId);
-            localToDistributedQueryMap.erase(localQueryId);
+            std::lock_guard<std::mutex> lock(worker.queryMapMutex);
+            worker.distributedToLocalMap.erase(distributedQueryId);
+            worker.localToDistributedMap.erase(localId);
         }
-        
-        NES_INFO("SingleNodeWorker: stopped query {}", distributedQueryId);
         
         return {};
     }
 
 private:
-    void initializeEngine() {
-        // Initialize buffer manager, node engine, compiler, etc.
-        // This is placeholder - actual implementation depends on existing code
-        NES_DEBUG("SingleNodeWorker: initializing engine components");
-    }
-    
-    void initializeReconciler() {
-        NES_INFO("SingleNodeWorker: initializing reconciler");
-        
-        ReconcilerConfiguration reconcilerConfig;
-        reconcilerConfig.etcdEndpoints = config.etcdEndpoints;
-        reconcilerConfig.keyPrefix = config.etcdKeyPrefix;
-        reconcilerConfig.pollInterval = config.reconcilerPollInterval;
-        reconcilerConfig.workerAddress = GrpcAddr(config.grpcAddressUri);
-        
-        auto bridge = std::make_shared<SingleNodeWorkerReconcilerBridge>(this);
-        reconciler = std::make_unique<Reconciler>(reconcilerConfig, bridge);
-        
-        NES_INFO("SingleNodeWorker: reconciler initialized (poll interval: {}ms)",
-                 config.reconcilerPollInterval.count());
-    }
-    
-    void startGrpcServer() {
-        // Start GRPC server for status queries
-        NES_DEBUG("SingleNodeWorker: starting GRPC server");
-    }
-    
-    void stopGrpcServer() {
-        // Stop GRPC server
-        NES_DEBUG("SingleNodeWorker: stopping GRPC server");
-    }
-    
-    void stopAllQueries() {
-        std::lock_guard<std::mutex> lock(queryMapMutex);
-        
-        for (const auto& [distId, localId] : distributedToLocalQueryMap) {
-            NES_DEBUG("SingleNodeWorker: stopping query {} during shutdown", distId);
-            // nodeEngine->stopQuery(localId);
-        }
-        
-        distributedToLocalQueryMap.clear();
-        localToDistributedQueryMap.clear();
-    }
-    
-    static std::string generateUniqueId() {
-        static std::atomic<uint64_t> counter{0};
-        return "local-" + std::to_string(counter++);
-    }
-    
-    SingleNodeWorkerConfiguration config;
-    
-    // Reconciler (only if enabled)
-    std::unique_ptr<Reconciler> reconciler;
-    
-    // Query tracking: DistributedQueryId <-> LocalQueryId
-    mutable std::mutex queryMapMutex;
-    std::unordered_map<DistributedQueryId, LocalQueryId> distributedToLocalQueryMap;
-    std::unordered_map<LocalQueryId, DistributedQueryId> localToDistributedQueryMap;
-    
-    // These would be the actual engine components
-    // std::unique_ptr<NodeEngine> nodeEngine;
-    // std::unique_ptr<QueryCompiler> compiler;
-    // std::unique_ptr<LocalOptimizer> localOptimizer;
+    SingleNodeWorker& worker;
 };
 
-} // namespace NES
+SingleNodeWorker::~SingleNodeWorker()
+{
+    if (reconciler) {
+        reconciler->stop();
+    }
+}
+
+SingleNodeWorker::SingleNodeWorker(SingleNodeWorker&& other) noexcept = default;
+SingleNodeWorker& SingleNodeWorker::operator=(SingleNodeWorker&& other) noexcept = default;
+
+SingleNodeWorker::SingleNodeWorker(const SingleNodeWorkerConfiguration& configuration, WorkerId workerId)
+    : listener(std::make_shared<CompositeStatisticListener>()), configuration(configuration)
+{
+    if (configuration.enableGoogleEventTrace.getValue())
+    {
+        auto googleTracePrinter = std::make_shared<GoogleEventTracePrinter>(
+            fmt::format("trace_{}_{:%Y-%m-%d_%H-%M-%S}_{:d}.json", workerId.getRawValue(), std::chrono::system_clock::now(), ::getpid()));
+        googleTracePrinter->start();
+        listener->addListener(googleTracePrinter);
+    }
+
+    nodeEngine = NodeEngineBuilder(configuration.workerConfiguration, copyPtr(listener)).build(workerId);
+
+    optimizer = std::make_unique<QueryOptimizer>(configuration.workerConfiguration.defaultQueryExecution);
+    compiler = std::make_unique<QueryCompilation::QueryCompiler>();
+
+    if (!configuration.connection.getValue().empty())
+    {
+        initReceiverService(configuration.connection.getValue().toString(), workerId);
+        initSenderService(configuration.connection.getValue().toString(), workerId);
+    }
+
+    // Initialize reconciler if enabled
+    if (configuration.enableReconciler.getValue())
+    {
+        ReconcilerConfiguration reconcilerConfig;
+        reconcilerConfig.etcdEndpoints = configuration.etcdEndpoints.getValue();
+        reconcilerConfig.etcdKeyPrefix = configuration.etcdKeyPrefix.getValue();
+        reconcilerConfig.workerAddress = configuration.grpcAddressUri.getValue().toString();
+        reconcilerConfig.pollInterval = std::chrono::milliseconds(
+            configuration.reconcilerPollIntervalMs.getValue());
+        
+        auto bridge = std::make_shared<SingleNodeWorkerReconcilerBridge>(*this);
+        reconciler = std::make_unique<Reconciler>(reconcilerConfig, bridge);
+        reconciler->start();
+        
+        NES_INFO("SingleNodeWorker: Reconciler started for worker {} polling {}",
+                 reconcilerConfig.workerAddress, reconcilerConfig.etcdEndpoints);
+    }
+}
+
+std::expected<LocalQueryId, Exception> SingleNodeWorker::registerQuery(LogicalPlan plan) noexcept
+{
+    CPPTRACE_TRY
+    {
+        /// Check if the plan already has a query ID
+        if (plan.getQueryId() == INVALID_LOCAL_QUERY_ID)
+        {
+            plan.setQueryId(LocalQueryId(generateUUID()));
+        }
+
+        const LogContext context("queryId", plan.getQueryId());
+
+        auto queryPlan = optimizer->optimize(plan);
+        listener->onEvent(SubmitQuerySystemEvent{plan.getQueryId(), explain(plan, ExplainVerbosity::Debug)});
+        auto request = std::make_unique<QueryCompilation::QueryCompilationRequest>(queryPlan);
+        request->dumpCompilationResult = configuration.workerConfiguration.dumpQueryCompilationIntermediateRepresentations.getValue();
+        auto result = compiler->compileQuery(std::move(request));
+        INVARIANT(result, "expected successful query compilation or exception, but got nothing");
+        nodeEngine->registerCompiledQueryPlan(plan.getQueryId(), std::move(result));
+        return plan.getQueryId();
+    }
+    CPPTRACE_CATCH(...)
+    {
+        return std::unexpected(wrapExternalException());
+    }
+    std::unreachable();
+}
+
+std::expected<void, Exception> SingleNodeWorker::startQuery(LocalQueryId queryId) noexcept
+{
+    CPPTRACE_TRY
+    {
+        PRECONDITION(queryId != INVALID_LOCAL_QUERY_ID, "QueryId must be not invalid!");
+        nodeEngine->startQuery(queryId);
+        return {};
+    }
+    CPPTRACE_CATCH(...)
+    {
+        return std::unexpected(wrapExternalException());
+    }
+    std::unreachable();
+}
+
+std::expected<void, Exception> SingleNodeWorker::stopQuery(LocalQueryId queryId, QueryTerminationType type) noexcept
+{
+    CPPTRACE_TRY
+    {
+        PRECONDITION(queryId != INVALID_LOCAL_QUERY_ID, "QueryId must be not invalid!");
+        nodeEngine->stopQuery(queryId, type);
+        return {};
+    }
+    CPPTRACE_CATCH(...)
+    {
+        return std::unexpected{wrapExternalException()};
+    }
+    std::unreachable();
+}
+
+std::expected<void, Exception> SingleNodeWorker::unregisterQuery(LocalQueryId queryId) noexcept
+{
+    CPPTRACE_TRY
+    {
+        PRECONDITION(queryId != INVALID_LOCAL_QUERY_ID, "QueryId must be not invalid!");
+        nodeEngine->unregisterQuery(queryId);
+        return {};
+    }
+    CPPTRACE_CATCH(...)
+    {
+        return std::unexpected(wrapExternalException());
+    }
+    std::unreachable();
+}
+
+std::expected<LocalQueryStatus, Exception> SingleNodeWorker::getQueryStatus(LocalQueryId queryId) const noexcept
+{
+    CPPTRACE_TRY
+    {
+        auto status = nodeEngine->getQueryLog()->getQueryStatus(queryId);
+        if (not status.has_value())
+        {
+            return std::unexpected{QueryNotFound("{}", queryId)};
+        }
+        return status.value();
+    }
+    CPPTRACE_CATCH(...)
+    {
+        return std::unexpected(wrapExternalException());
+    }
+    std::unreachable();
+}
+
+WorkerStatus SingleNodeWorker::getWorkerStatus(std::chrono::system_clock::time_point after) const
+{
+    const std::chrono::system_clock::time_point until = std::chrono::system_clock::now();
+    const auto summaries = nodeEngine->getQueryLog()->getStatus();
+    WorkerStatus status;
+    status.after = after;
+    status.until = until;
+    for (const auto& [queryId, state, metrics] : summaries)
+    {
+        switch (state)
+        {
+            case QueryState::Registered:
+                /// Ignore these for the worker status
+                break;
+            case QueryState::Started:
+                INVARIANT(metrics.start.has_value(), "If query is started, it should have a start timestamp");
+                if (metrics.start.value() >= after)
+                {
+                    status.activeQueries.emplace_back(queryId, std::nullopt);
+                }
+                break;
+            case QueryState::Running: {
+                INVARIANT(metrics.running.has_value(), "If query is running, it should have a running timestamp");
+                if (metrics.running.value() >= after)
+                {
+                    status.activeQueries.emplace_back(queryId, metrics.running.value());
+                }
+                break;
+            }
+            case QueryState::Stopped: {
+                INVARIANT(metrics.running.has_value(), "If query is stopped, it should have a running timestamp");
+                INVARIANT(metrics.stop.has_value(), "If query is stopped, it should have a stopped timestamp");
+                if (metrics.stop.value() >= after)
+                {
+                    status.terminatedQueries.emplace_back(queryId, metrics.running, metrics.stop.value(), metrics.error);
+                }
+                break;
+            }
+            case QueryState::Failed: {
+                INVARIANT(metrics.stop.has_value(), "If query has failed, it should have a stopped timestamp");
+                if (metrics.stop.value() >= after)
+                {
+                    status.terminatedQueries.emplace_back(queryId, metrics.running, metrics.stop.value(), metrics.error);
+                }
+            }
+        }
+    }
+    return status;
+}
+
+std::optional<QueryLog::Log> SingleNodeWorker::getQueryLog(LocalQueryId queryId) const
+{
+    return nodeEngine->getQueryLog()->getLogForQuery(queryId);
+}
+
+}

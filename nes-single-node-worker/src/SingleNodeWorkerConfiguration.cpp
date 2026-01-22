@@ -14,15 +14,14 @@
 
 #include <SingleNodeWorkerConfiguration.hpp>
 
-std::vector<NES::BaseOption*>
-NES::SingleNodeWorkerConfiguration::getOptions()
+std::vector<NES::BaseOption*> NES::SingleNodeWorkerConfiguration::getOptions()
 {
-    return {
-        &workerConfiguration,
-        &grpcAddressUri,
-        &connection,
-        &enableGoogleEventTrace,
-        &queryPlanStoreDir
-    };
+    return {&workerConfiguration, 
+            &grpcAddressUri, 
+            &connection, 
+            &enableGoogleEventTrace,
+            &enableReconciler,
+            &etcdEndpoints,
+            &etcdKeyPrefix,
+            &reconcilerPollIntervalMs};
 }
-

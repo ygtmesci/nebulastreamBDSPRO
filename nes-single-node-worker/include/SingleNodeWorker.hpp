@@ -17,7 +17,10 @@
 #include <chrono>
 #include <expected>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <string>
+#include <unordered_map>
 #include <Identifiers/Identifiers.hpp>
 #include <Listeners/QueryLog.hpp>
 #include <Plans/LogicalPlan.hpp>
@@ -32,10 +35,11 @@
 #include <SingleNodeWorkerConfiguration.hpp>
 #include <WorkerStatus.hpp>
 
-#include <WorkerState/WorkerQueryPlanStore.h>
-
 namespace NES
 {
+
+class Reconciler;
+class SingleNodeWorkerReconcilerBridge;
 
 /// @brief The SingleNodeWorker is a compiling StreamProcessingEngine, working alone on local sources and sinks, without external
 /// coordination. The SingleNodeWorker can register LogicalQueryPlans which are lowered into an executable format, by the
@@ -47,8 +51,18 @@ class SingleNodeWorker
     SharedPtr<NodeEngine> nodeEngine;
     UniquePtr<QueryOptimizer> optimizer;
     UniquePtr<QueryCompilation::QueryCompiler> compiler;
-    UniquePtr<WorkerQueryPlanStore> planStore;   // Janhvi
     SingleNodeWorkerConfiguration configuration;
+
+    /// Reconciler for etcd-based query management
+    std::unique_ptr<Reconciler> reconciler;
+    
+    /// Mapping between distributed query IDs and local query IDs
+    std::unordered_map<std::string, LocalQueryId> distributedToLocalMap;
+    std::unordered_map<LocalQueryId, std::string> localToDistributedMap;
+    mutable std::mutex queryMapMutex;
+
+    /// Allow bridge class to access private members
+    friend class SingleNodeWorkerReconcilerBridge;
 
 public:
     explicit SingleNodeWorker(const SingleNodeWorkerConfiguration&, WorkerId = WorkerId("SingleNodeWorker"));
@@ -60,7 +74,6 @@ public:
     /// Movable
     SingleNodeWorker(SingleNodeWorker&& other) noexcept;
     SingleNodeWorker& operator=(SingleNodeWorker&& other) noexcept;
-
 
     /// Registers a DecomposedQueryPlan which internally triggers the QueryCompiler and registers the executable query plan. Once
     /// returned the query can be started with the QueryId. The registered Query will be in the StoppedState
