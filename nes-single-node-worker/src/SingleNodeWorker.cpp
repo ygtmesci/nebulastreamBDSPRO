@@ -88,8 +88,8 @@ public:
         // Track the mapping
         {
             std::lock_guard<std::mutex> lock(*worker.queryMapMutex);
-            worker.distributedToLocalMap[distributedQueryId] = localId;
-            worker.localToDistributedMap[localId] = distributedQueryId;
+            worker.distributedToLocalMap.insert_or_assign(distributedQueryId, localId);
+            worker.localToDistributedMap.insert_or_assign(localId, distributedQueryId);
         }
         
         return localId;
