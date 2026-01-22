@@ -64,7 +64,7 @@ connections.  Valid values include dns:///localhost:1234,
     /// Reconciler poll interval in milliseconds
     ScalarOption<uint32_t> reconcilerPollIntervalMs
         = {"reconciler_poll_interval_ms",
-           1000,
+           "1000",
            "How often the reconciler polls etcd for changes (milliseconds)."};
 
 protected:
