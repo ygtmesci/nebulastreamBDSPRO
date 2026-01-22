@@ -59,7 +59,7 @@ class SingleNodeWorker
     /// Mapping between distributed query IDs and local query IDs
     std::unordered_map<std::string, LocalQueryId> distributedToLocalMap;
     std::unordered_map<LocalQueryId, std::string> localToDistributedMap;
-    mutable std::mutex queryMapMutex;
+    std::unique_ptr<std::mutex> queryMapMutex;
 
     /// Allow bridge class to access private members
     friend class SingleNodeWorkerReconcilerBridge;
@@ -67,11 +67,13 @@ class SingleNodeWorker
 public:
     explicit SingleNodeWorker(const SingleNodeWorkerConfiguration&, WorkerId = WorkerId("SingleNodeWorker"));
     ~SingleNodeWorker();
-    /// Non-Copyable, Non-Movable (mutex member)
+    /// Non-Copyable
     SingleNodeWorker(const SingleNodeWorker& other) = delete;
     SingleNodeWorker& operator=(const SingleNodeWorker& other) = delete;
-    SingleNodeWorker(SingleNodeWorker&& other) = delete;
-    SingleNodeWorker& operator=(SingleNodeWorker&& other) = delete;
+
+    /// Movable
+    SingleNodeWorker(SingleNodeWorker&& other) noexcept;
+    SingleNodeWorker& operator=(SingleNodeWorker&& other) noexcept;
 
     /// Registers a DecomposedQueryPlan which internally triggers the QueryCompiler and registers the executable query plan. Once
     /// returned the query can be started with the QueryId. The registered Query will be in the StoppedState

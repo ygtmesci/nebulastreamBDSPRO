@@ -58,7 +58,7 @@ public:
     explicit SingleNodeWorkerReconcilerBridge(SingleNodeWorker& worker) : worker(worker) {}
 
     std::unordered_set<std::string> getRunningDistributedQueryIds() const override {
-        std::lock_guard<std::mutex> lock(worker.queryMapMutex);
+        std::lock_guard<std::mutex> lock(*worker.queryMapMutex);
         std::unordered_set<std::string> result;
         for (const auto& [distId, localId] : worker.distributedToLocalMap) {
             result.insert(distId);
@@ -87,7 +87,7 @@ public:
         
         // Track the mapping
         {
-            std::lock_guard<std::mutex> lock(worker.queryMapMutex);
+            std::lock_guard<std::mutex> lock(*worker.queryMapMutex);
             worker.distributedToLocalMap[distributedQueryId] = localId;
             worker.localToDistributedMap[localId] = distributedQueryId;
         }
@@ -98,7 +98,7 @@ public:
     std::expected<void, Exception> stopQuery(const std::string& distributedQueryId) override {
         LocalQueryId localId = INVALID_LOCAL_QUERY_ID;
         {
-            std::lock_guard<std::mutex> lock(worker.queryMapMutex);
+            std::lock_guard<std::mutex> lock(*worker.queryMapMutex);
             auto it = worker.distributedToLocalMap.find(distributedQueryId);
             if (it == worker.distributedToLocalMap.end()) {
                 return std::unexpected(Exception("Query not found: " + distributedQueryId, 
@@ -121,7 +121,7 @@ public:
         
         // Remove from tracking
         {
-            std::lock_guard<std::mutex> lock(worker.queryMapMutex);
+            std::lock_guard<std::mutex> lock(*worker.queryMapMutex);
             worker.distributedToLocalMap.erase(distributedQueryId);
             worker.localToDistributedMap.erase(localId);
         }
@@ -140,8 +140,11 @@ SingleNodeWorker::~SingleNodeWorker()
     }
 }
 
+SingleNodeWorker::SingleNodeWorker(SingleNodeWorker&& other) noexcept = default;
+SingleNodeWorker& SingleNodeWorker::operator=(SingleNodeWorker&& other) noexcept = default;
+
 SingleNodeWorker::SingleNodeWorker(const SingleNodeWorkerConfiguration& configuration, WorkerId workerId)
-    : listener(std::make_shared<CompositeStatisticListener>()), configuration(configuration)
+    : listener(std::make_shared<CompositeStatisticListener>()), configuration(configuration), queryMapMutex(std::make_unique<std::mutex>())
 {
     if (configuration.enableGoogleEventTrace.getValue())
     {
