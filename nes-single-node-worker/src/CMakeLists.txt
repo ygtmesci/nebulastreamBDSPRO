@@ -12,12 +12,5 @@
 
 add_source_files(nes-single-node-worker
         SingleNodeWorker.cpp
-        SingleNodeWorkerConfiguration.cpp
-        GrpcService.cpp
-        GoogleEventTracePrinter.cpp
-        CompositeStatisticListener.cpp
-
-        # Worker state persistence - Janhvi
-        WorkerState/FileWorkerQueryPlanStore.cpp
+        Reconciler.cpp
 )
-

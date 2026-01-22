@@ -10,27 +10,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Add Source Code
 add_subdirectory(src)
-include(GNUInstallDirs)
 
-add_library(nes-single-node-worker-interface interface/WorkerStatus.cpp)
-target_include_directories(nes-single-node-worker-interface PUBLIC interface)
-target_link_libraries(nes-single-node-worker-interface PUBLIC nes-common nes-grpc)
+get_source(nes-single-node-worker SINGLE_NODE_WORKER_SOURCE_FILES)
 
-# Add nes-worker library
-get_source(nes-single-node-worker NES_WORKER_SOURCE_FILES)
-add_library(nes-single-node-worker-lib ${NES_WORKER_SOURCE_FILES})
+add_library(nes-single-node-worker-lib STATIC ${SINGLE_NODE_WORKER_SOURCE_FILES})
 
-target_include_directories(nes-single-node-worker-lib PUBLIC include)
+find_package(etcd-cpp-api CONFIG REQUIRED)
 
-target_link_libraries(nes-single-node-worker-lib
+target_include_directories(nes-single-node-worker-lib
         PUBLIC
-        nes-grpc
-        nes-query-compiler
-        nes-query-optimizer
-        nes-single-node-worker-interface
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        PRIVATE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/private>
 )
 
-add_executable(nes-single-node-worker src/SingleNodeWorkerStarter.cpp)
-target_link_libraries(nes-single-node-worker PRIVATE nes-single-node-worker-lib)
+target_link_libraries(nes-single-node-worker-lib
+        PUBLIC nes-logical-operators nes-single-node-worker-interface nes-node-engine
+        PRIVATE etcd-cpp-api
+)
+
+add_tests_if_enabled(tests)

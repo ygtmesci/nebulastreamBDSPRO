@@ -1,60 +1,70 @@
+/*
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
+
+        https://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
+*/
+
 #pragma once
 
+#include <chrono>
+#include <cstdint>
 #include <string>
-#include <Configuration/WorkerConfiguration.hpp>
-#include <Configurations/BaseConfiguration.hpp>
-#include <Configurations/ScalarOption.hpp>
-#include <Util/URI.hpp>
+#include <optional>
 
 namespace NES {
 
-class SingleNodeWorkerConfiguration final : public BaseConfiguration {
-public:
-    /// Connection name ({Hostname}:{PORT})
-    ScalarOption<NES::URI> connection{
-        "connection",
-        "Connection name. This is the {Hostname}:{PORT}"
-    };
-
-    /// GRPC Server Address URI
-    ScalarOption<NES::URI> grpcAddressUri{
-        "grpc",
-        "localhost:8080",
-        R"(The address to try to bind to the server in URI form. If
-the scheme name is omitted, "dns:///" is assumed. To bind to any address,
-please use IPv6 any, i.e., [::]:<port>, which also accepts IPv4
-connections. Valid values include dns:///localhost:1234,
-192.168.1.1:31416, dns:///[::1]:27182, etc.)"
-    };
-
-    /// Enable Google Event Trace logging
-    BoolOption enableGoogleEventTrace{
-        "enable_event_trace",
-        "false",
-        "Enable Google Event Trace logging that generates Chrome tracing compatible JSON files."
-    };
-
-    /// Directory for persisting query plans (ENABLED FEATURE)
-    ScalarOption<std::string> queryPlanStoreDir{
-        "queryPlanStoreDir",
-        "",
-        "Directory to persist serialized logical query plans for fault tolerance"
-    };
-
-protected:
-    std::vector<BaseOption*> getOptions() override;
-
-    template <typename T>
-    friend void generateHelp(std::ostream& ostream);
-
-public:
-    SingleNodeWorkerConfiguration() = default;
-
-    /// NodeEngine configuration subtree
-    WorkerConfiguration workerConfiguration{
-        "worker",
-        "NodeEngine Configuration"
-    };
+/// Configuration for the SingleNodeWorker
+struct SingleNodeWorkerConfiguration {
+    /// GRPC address this worker listens on (also used as worker identity)
+    std::string grpcAddressUri = "localhost:8080";
+    
+    /// Number of worker threads for query execution
+    uint32_t numWorkerThreads = 4;
+    
+    /// Buffer size for data processing
+    uint32_t bufferSize = 4096;
+    
+    /// Number of buffers in the pool
+    uint32_t numBuffers = 128;
+    
+    // ============================================
+    // Reconciler / etcd configuration
+    // ============================================
+    
+    /// Enable reconciler (pull-based mode with etcd)
+    /// If false, worker operates in traditional GRPC push mode
+    bool enableReconciler = false;
+    
+    /// etcd endpoint(s) for the reconciler
+    /// Can be comma-separated for multiple endpoints
+    std::string etcdEndpoints = "http://etcd:2379";
+    
+    /// Key prefix for queries in etcd
+    std::string etcdKeyPrefix = "/nes/queries/";
+    
+    /// How often the reconciler polls etcd (milliseconds)
+    std::chrono::milliseconds reconcilerPollInterval{1000};
+    
+    // ============================================
+    // Helper methods
+    // ============================================
+    
+    /// Parse configuration from command line arguments
+    static SingleNodeWorkerConfiguration fromCommandLine(int argc, char** argv);
+    
+    /// Parse configuration from environment variables
+    static SingleNodeWorkerConfiguration fromEnvironment();
+    
+    /// Validate configuration, throws if invalid
+    void validate() const;
 };
 
 } // namespace NES
