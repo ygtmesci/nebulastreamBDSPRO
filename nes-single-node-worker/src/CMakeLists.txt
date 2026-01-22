@@ -12,5 +12,8 @@
 
 add_source_files(nes-single-node-worker
         SingleNodeWorker.cpp
+        GrpcService.cpp
+        GoogleEventTracePrinter.cpp
+        CompositeStatisticListener.cpp
         Reconciler.cpp
 )
