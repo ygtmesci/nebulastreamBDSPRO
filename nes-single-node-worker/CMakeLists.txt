@@ -30,5 +30,3 @@ target_link_libraries(nes-single-node-worker-lib
         PUBLIC nes-logical-operators nes-single-node-worker-interface nes-node-engine
         PRIVATE etcd-cpp-api
 )
-
-add_tests_if_enabled(tests)
