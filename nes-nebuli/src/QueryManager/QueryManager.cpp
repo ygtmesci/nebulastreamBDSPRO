@@ -174,6 +174,11 @@ QueryManager::registerQuery(const DistributedLogicalPlan& plan)
 std::expected<DistributedQueryId, Exception>
 QueryManager::persistQueryToEtcd(const DistributedLogicalPlan& plan)
 {
+    if (!etcdStore)
+    {
+        return std::unexpected(Exception("etcdStore not initialized", ErrorCode::UnknownException));
+    }
+
     auto id = plan.getQueryId();
     if (id == DistributedQueryId(DistributedQueryId::INVALID))
     {
@@ -246,10 +251,13 @@ QueryManager::unregister(DistributedQueryId queryId)
 
     NES_INFO("QueryManager: unregistering query {} from etcd", queryId);
 
-    auto eraseResult = etcdStore->eraseQuery(queryId);
-    if (!eraseResult)
+    if (etcdStore)
     {
-        return std::unexpected(std::vector{eraseResult.error()});
+        auto eraseResult = etcdStore->eraseQuery(queryId);
+        if (!eraseResult)
+        {
+            return std::unexpected(std::vector{eraseResult.error()});
+        }
     }
 
     state.queries.erase(queryId);
@@ -278,12 +286,15 @@ QueryManager::status(const DistributedQueryId& queryId) const
 
 std::vector<DistributedQueryId> QueryManager::queries() const
 {
-    auto result = etcdStore->getAllQueryIds();
-    if (result)
+    if (etcdStore)
     {
-        return *result;
+        auto result = etcdStore->getAllQueryIds();
+        if (result)
+        {
+            return *result;
+        }
+        NES_WARNING("QueryManager: failed to fetch from etcd, using cache");
     }
-    NES_WARNING("QueryManager: failed to fetch from etcd, using cache");
     return state.queries | std::views::keys | std::ranges::to<std::vector>();
 }
 
