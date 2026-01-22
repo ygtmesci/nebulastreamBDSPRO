@@ -67,13 +67,11 @@ class SingleNodeWorker
 public:
     explicit SingleNodeWorker(const SingleNodeWorkerConfiguration&, WorkerId = WorkerId("SingleNodeWorker"));
     ~SingleNodeWorker();
-    /// Non-Copyable
+    /// Non-Copyable, Non-Movable (mutex member)
     SingleNodeWorker(const SingleNodeWorker& other) = delete;
     SingleNodeWorker& operator=(const SingleNodeWorker& other) = delete;
-
-    /// Movable
-    SingleNodeWorker(SingleNodeWorker&& other) noexcept;
-    SingleNodeWorker& operator=(SingleNodeWorker&& other) noexcept;
+    SingleNodeWorker(SingleNodeWorker&& other) = delete;
+    SingleNodeWorker& operator=(SingleNodeWorker&& other) = delete;
 
     /// Registers a DecomposedQueryPlan which internally triggers the QueryCompiler and registers the executable query plan. Once
     /// returned the query can be started with the QueryId. The registered Query will be in the StoppedState

@@ -140,9 +140,6 @@ SingleNodeWorker::~SingleNodeWorker()
     }
 }
 
-SingleNodeWorker::SingleNodeWorker(SingleNodeWorker&& other) noexcept = default;
-SingleNodeWorker& SingleNodeWorker::operator=(SingleNodeWorker&& other) noexcept = default;
-
 SingleNodeWorker::SingleNodeWorker(const SingleNodeWorkerConfiguration& configuration, WorkerId workerId)
     : listener(std::make_shared<CompositeStatisticListener>()), configuration(configuration)
 {
