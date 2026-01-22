@@ -17,10 +17,7 @@
 #include <chrono>
 #include <expected>
 #include <memory>
-#include <mutex>
 #include <optional>
-#include <string>
-#include <unordered_map>
 #include <Identifiers/Identifiers.hpp>
 #include <Listeners/QueryLog.hpp>
 #include <Plans/LogicalPlan.hpp>
@@ -39,7 +36,6 @@ namespace NES
 {
 
 class Reconciler;
-class SingleNodeWorkerReconcilerBridge;
 
 /// @brief The SingleNodeWorker is a compiling StreamProcessingEngine, working alone on local sources and sinks, without external
 /// coordination. The SingleNodeWorker can register LogicalQueryPlans which are lowered into an executable format, by the
@@ -52,17 +48,7 @@ class SingleNodeWorker
     UniquePtr<QueryOptimizer> optimizer;
     UniquePtr<QueryCompilation::QueryCompiler> compiler;
     SingleNodeWorkerConfiguration configuration;
-
-    /// Reconciler for etcd-based query management
     std::unique_ptr<Reconciler> reconciler;
-    
-    /// Mapping between distributed query IDs and local query IDs
-    std::unordered_map<std::string, LocalQueryId> distributedToLocalMap;
-    std::unordered_map<LocalQueryId, std::string> localToDistributedMap;
-    std::unique_ptr<std::mutex> queryMapMutex;
-
-    /// Allow bridge class to access private members
-    friend class SingleNodeWorkerReconcilerBridge;
 
 public:
     explicit SingleNodeWorker(const SingleNodeWorkerConfiguration&, WorkerId = WorkerId("SingleNodeWorker"));

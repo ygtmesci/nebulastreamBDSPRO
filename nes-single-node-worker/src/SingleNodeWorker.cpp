@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -52,87 +53,6 @@ extern void initSenderService(const std::string& connectionAddr, const NES::Work
 namespace NES
 {
 
-/// Bridge between Reconciler and SingleNodeWorker
-class SingleNodeWorkerReconcilerBridge : public ReconcilerWorkerInterface {
-public:
-    explicit SingleNodeWorkerReconcilerBridge(SingleNodeWorker& worker) : worker(worker) {}
-
-    std::unordered_set<std::string> getRunningDistributedQueryIds() const override {
-        std::lock_guard<std::mutex> lock(*worker.queryMapMutex);
-        std::unordered_set<std::string> result;
-        for (const auto& [distId, localId] : worker.distributedToLocalMap) {
-            result.insert(distId);
-        }
-        return result;
-    }
-
-    std::expected<LocalQueryId, Exception> startQuery(
-        const std::string& distributedQueryId, 
-        LogicalPlan plan) override 
-    {
-        // Register the query
-        auto registerResult = worker.registerQuery(std::move(plan));
-        if (!registerResult) {
-            return std::unexpected(registerResult.error());
-        }
-        
-        LocalQueryId localId = *registerResult;
-        
-        // Start the query
-        auto startResult = worker.startQuery(localId);
-        if (!startResult) {
-            worker.unregisterQuery(localId);
-            return std::unexpected(startResult.error());
-        }
-        
-        // Track the mapping
-        {
-            std::lock_guard<std::mutex> lock(*worker.queryMapMutex);
-            worker.distributedToLocalMap.insert_or_assign(distributedQueryId, localId);
-            worker.localToDistributedMap.insert_or_assign(localId, distributedQueryId);
-        }
-        
-        return localId;
-    }
-
-    std::expected<void, Exception> stopQuery(const std::string& distributedQueryId) override {
-        LocalQueryId localId = INVALID_LOCAL_QUERY_ID;
-        {
-            std::lock_guard<std::mutex> lock(*worker.queryMapMutex);
-            auto it = worker.distributedToLocalMap.find(distributedQueryId);
-            if (it == worker.distributedToLocalMap.end()) {
-                return std::unexpected(Exception("Query not found: " + distributedQueryId, 
-                                                  ErrorCode::UnknownException));
-            }
-            localId = it->second;
-        }
-        
-        // Stop the query
-        auto stopResult = worker.stopQuery(localId, QueryTerminationType::Graceful);
-        if (!stopResult) {
-            return std::unexpected(stopResult.error());
-        }
-        
-        // Unregister the query
-        auto unregisterResult = worker.unregisterQuery(localId);
-        if (!unregisterResult) {
-            return std::unexpected(unregisterResult.error());
-        }
-        
-        // Remove from tracking
-        {
-            std::lock_guard<std::mutex> lock(*worker.queryMapMutex);
-            worker.distributedToLocalMap.erase(distributedQueryId);
-            worker.localToDistributedMap.erase(localId);
-        }
-        
-        return {};
-    }
-
-private:
-    SingleNodeWorker& worker;
-};
-
 SingleNodeWorker::~SingleNodeWorker()
 {
     if (reconciler) {
@@ -144,7 +64,7 @@ SingleNodeWorker::SingleNodeWorker(SingleNodeWorker&& other) noexcept = default;
 SingleNodeWorker& SingleNodeWorker::operator=(SingleNodeWorker&& other) noexcept = default;
 
 SingleNodeWorker::SingleNodeWorker(const SingleNodeWorkerConfiguration& configuration, WorkerId workerId)
-    : listener(std::make_shared<CompositeStatisticListener>()), configuration(configuration), queryMapMutex(std::make_unique<std::mutex>())
+    : listener(std::make_shared<CompositeStatisticListener>()), configuration(configuration)
 {
     if (configuration.enableGoogleEventTrace.getValue())
     {
@@ -165,22 +85,18 @@ SingleNodeWorker::SingleNodeWorker(const SingleNodeWorkerConfiguration& configur
         initSenderService(configuration.connection.getValue().toString(), workerId);
     }
 
-    // Initialize reconciler if enabled
-    if (configuration.enableReconciler.getValue())
+    // Start reconciler if enabled via environment variable
+    const char* enableReconciler = std::getenv("NES_ENABLE_RECONCILER");
+    if (enableReconciler && std::string(enableReconciler) == "true")
     {
-        ReconcilerConfiguration reconcilerConfig;
-        reconcilerConfig.etcdEndpoints = configuration.etcdEndpoints.getValue();
-        reconcilerConfig.etcdKeyPrefix = configuration.etcdKeyPrefix.getValue();
-        reconcilerConfig.workerAddress = configuration.grpcAddressUri.getValue().toString();
-        reconcilerConfig.pollInterval = std::chrono::milliseconds(
-            configuration.reconcilerPollIntervalMs.getValue());
-        
-        auto bridge = std::make_shared<SingleNodeWorkerReconcilerBridge>(*this);
-        reconciler = std::make_unique<Reconciler>(reconcilerConfig, bridge);
+        const char* etcdEndpoints = std::getenv("NES_ETCD_ENDPOINTS");
+        reconciler = std::make_unique<Reconciler>(
+            *this,
+            configuration.grpcAddressUri.getValue().toString(),
+            etcdEndpoints ? etcdEndpoints : "http://etcd:2379"
+        );
         reconciler->start();
-        
-        NES_INFO("SingleNodeWorker: Reconciler started for worker {} polling {}",
-                 reconcilerConfig.workerAddress, reconcilerConfig.etcdEndpoints);
+        NES_INFO("SingleNodeWorker: Reconciler started");
     }
 }
 
