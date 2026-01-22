@@ -6,6 +6,8 @@
 #include <SingleNodeWorker.hpp>
 
 #include <algorithm>
+#include <utility>
+#include <vector>
 #include <Serialization/QueryPlanSerializationUtil.hpp>
 #include <SerializableQueryPlan.pb.h>
 #include <Util/Logger/Logger.hpp>
@@ -133,23 +135,17 @@ void Reconciler::reconcile() {
     }
 
     // Stop removed queries
-    std::vector<std::string> toRemove;
+    std::vector<std::pair<std::string, LocalQueryId>> toRemove;
     {
         std::lock_guard<std::mutex> lock(mapMutex);
         for (const auto& [queryId, localId] : runningQueries) {
             if (!desiredQueries.contains(queryId)) {
-                toRemove.push_back(queryId);
+                toRemove.emplace_back(queryId, localId);
             }
         }
     }
     
-    for (const auto& queryId : toRemove) {
-        LocalQueryId localId;
-        {
-            std::lock_guard<std::mutex> lock(mapMutex);
-            localId = runningQueries.at(queryId);
-        }
-        
+    for (const auto& [queryId, localId] : toRemove) {
         NES_INFO("Reconciler: stopping query {}", queryId);
         worker.stopQuery(localId, QueryTerminationType::Graceful);
         worker.unregisterQuery(localId);
